@@ -1,6 +1,26 @@
-export type InventoryItemId = 'wood' | 'stone' | 'ore' | 'scrap' | 'crystal';
+export type InventoryItemId =
+  | 'wood'
+  | 'stone'
+  | 'ore'
+  | 'scrap'
+  | 'crystal'
+  | 'diamond'
+  | 'emerald'
+  | 'sapphire'
+  | 'gold'
+  | 'iron'
+  | 'silver';
 
 export type StructureKind = 'house' | 'bench' | 'wall' | 'light' | 'decoration';
+
+export type CaveGemId = 'diamond' | 'emerald' | 'sapphire';
+
+/** Queued cave-gem respawn (picked on next cave enter at a different room). */
+export interface PendingCaveGem {
+  id: CaveGemId;
+  excludeTx: number;
+  excludeTy: number;
+}
 
 export interface PlacedStructure {
   id: string;
@@ -22,6 +42,7 @@ export interface PersistedState {
   inventory: Record<InventoryItemId, number>;
   structures: PlacedStructure[];
   lastScene: 'TownScene' | 'CaveScene';
+  pendingCaveGems: PendingCaveGem[];
 }
 
 const STORAGE_KEY = 'survival-town-save-v1';
@@ -40,9 +61,16 @@ const DEFAULT_STATE: PersistedState = {
     ore: 2,
     scrap: 2,
     crystal: 0,
+    diamond: 0,
+    emerald: 0,
+    sapphire: 0,
+    gold: 0,
+    iron: 0,
+    silver: 0,
   },
   structures: [],
   lastScene: 'TownScene',
+  pendingCaveGems: [],
 };
 
 function cloneDefault(): PersistedState {
@@ -77,6 +105,10 @@ export class GameState {
     return this.data.lastScene;
   }
 
+  get pendingCaveGems(): PendingCaveGem[] {
+    return this.data.pendingCaveGems;
+  }
+
   setLastScene(scene: PersistedState['lastScene']): void {
     this.data.lastScene = scene;
     this.queueSave();
@@ -87,7 +119,6 @@ export class GameState {
     this.queueSave();
   }
 
-  /** Returns true if every listed cost can be paid from current inventory. */
   canAfford(costs: Partial<Record<InventoryItemId, number>>): boolean {
     return (Object.entries(costs) as [InventoryItemId, number][]).every(
       ([id, cost]) => (this.data.inventory[id] ?? 0) >= cost,
@@ -107,7 +138,6 @@ export class GameState {
     return true;
   }
 
-  /** Refund materials into inventory (e.g. after removing a structure). */
   refundItems(costs: Partial<Record<InventoryItemId, number>>): void {
     for (const [id, amount] of Object.entries(costs) as [InventoryItemId, number][]) {
       this.data.inventory[id] = (this.data.inventory[id] ?? 0) + amount;
@@ -145,6 +175,18 @@ export class GameState {
     return removed ?? null;
   }
 
+  queueCaveGemRespawn(gem: PendingCaveGem): void {
+    this.data.pendingCaveGems.push(gem);
+    this.queueSave();
+  }
+
+  takePendingCaveGems(): PendingCaveGem[] {
+    const gems = [...this.data.pendingCaveGems];
+    this.data.pendingCaveGems = [];
+    this.queueSave();
+    return gems;
+  }
+
   reset(): void {
     this.data = cloneDefault();
     this.saveNow();
@@ -168,6 +210,7 @@ export class GameState {
         player: { ...cloneDefault().player, ...parsed.player },
         inventory: { ...cloneDefault().inventory, ...parsed.inventory },
         structures: Array.isArray(parsed.structures) ? parsed.structures : [],
+        pendingCaveGems: Array.isArray(parsed.pendingCaveGems) ? parsed.pendingCaveGems : [],
       };
     } catch {
       return null;

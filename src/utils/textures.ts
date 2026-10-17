@@ -66,6 +66,8 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
   }
   rect('tile-grass', 32, 32, 0x3f6212);
   rect('tile-path', 32, 32, 0x854d0e);
+  rect('tile-wild-a', 32, 32, 0x4a3f1e);
+  rect('tile-wild-b', 32, 32, 0x3d3418);
   // Legacy navy cave tiles (unused by walkway map; kept for safety)
   rect('tile-cave', 32, 32, 0x1e293b);
   rect('tile-cave-alt', 32, 32, 0x0f172a);

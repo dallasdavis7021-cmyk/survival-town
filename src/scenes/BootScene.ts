@@ -1,10 +1,15 @@
 import Phaser from 'phaser';
 import { gameState } from '../state/GameState';
+import { preloadMinerals } from '../systems/Minerals';
 
-/** Routes to the last persisted scene (town by default). */
+/** Preloads shared assets, then routes to the last persisted scene. */
 export class BootScene extends Phaser.Scene {
   constructor() {
     super('BootScene');
+  }
+
+  preload(): void {
+    preloadMinerals(this);
   }
 
   create(): void {

@@ -16,6 +16,8 @@ Top-down browser action RPG / town builder. Explore caves for loot and ore, retu
 | `TownScene` | Safe haven — building only, no hostile spawns |
 | `CaveScene` | Maze walkways, hostiles, mining, melee, fog |
 | `caveLayout` | Deterministic carved tilemap (rooms/corridors) |
+| `CaveGemSpawner` | Diamond/emerald/sapphire in cave rooms |
+| `WildernessMetalSpawner` | Gold/iron/silver outside town safe zone |
 | `PlayerTools` | Shared Mining → Weapon → Building tool cycle |
 | `LootDrops` | Ground pickups collected with E |
 | `PlacementManager` | 32×32 ghost preview, palette, place/remove + refund |
@@ -58,7 +60,8 @@ Town is an absolute safe zone (no hostiles). Building placements only apply in t
 ### Scene tips
 
 - **Town:** north **CAVE ENTRANCE** gate enters the cave
-- **Cave:** darker-red rock maze with black walkways (solid wall collision); three depth tiers northward; **RETURN TO TOWN** at the south foyer
+- **Overworld:** town **safe zone** (build / cave gate) surrounded by **wilderness** (gold/iron/silver nodes)
+- **Cave:** darker-red rock maze; gems (diamond/emerald/sapphire) spawn in **rooms** only; three depth tiers; **RETURN TO TOWN** at the south foyer
 
 ## v0 notes
 
