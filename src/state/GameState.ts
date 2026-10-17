@@ -1,4 +1,4 @@
-export type InventoryItemId = 'wood' | 'stone' | 'ore' | 'scrap';
+export type InventoryItemId = 'wood' | 'stone' | 'ore' | 'scrap' | 'crystal';
 
 export type StructureKind = 'house' | 'bench' | 'wall' | 'light' | 'decoration';
 
@@ -39,6 +39,7 @@ const DEFAULT_STATE: PersistedState = {
     stone: 10,
     ore: 2,
     scrap: 2,
+    crystal: 0,
   },
   structures: [],
   lastScene: 'TownScene',

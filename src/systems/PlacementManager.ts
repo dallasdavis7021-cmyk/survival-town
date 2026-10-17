@@ -471,7 +471,7 @@ export class PlacementManager {
       [
         'TOWN — absolute safe zone (no hostiles)',
         `HP ${gameState.player.hp}/${gameState.player.maxHp}`,
-        `Inv: wood ${inv.wood}  stone ${inv.stone}  ore ${inv.ore}  scrap ${inv.scrap}`,
+        `Inv: wood ${inv.wood}  stone ${inv.stone}  ore ${inv.ore}  scrap ${inv.scrap}  crystal ${inv.crystal ?? 0}`,
         modeLine,
       ].join('\n'),
     );
