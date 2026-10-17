@@ -35,7 +35,11 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
 
   rect('player', 22, 22, 0x4ade80, 0x166534);
   rect('hostile', 22, 22, 0xf87171, 0x7f1d1d);
+  rect('hostile-mid', 24, 24, 0xfb7185, 0x9f1239);
+  rect('hostile-elite', 26, 26, 0xe879f9, 0x701a75);
   rect('ore-node', 28, 28, 0x94a3b8, 0x334155);
+  rect('ore-rich', 28, 28, 0x38bdf8, 0x0c4a6e);
+  rect('ore-rare', 28, 28, 0xc084fc, 0x581c87);
   rect('house', 30, 30, 0xd97706, 0x78350f);
   rect('bench', 30, 30, 0xa16207, 0x713f12);
   rect('wall', 30, 30, 0x64748b, 0x1e293b);
@@ -51,10 +55,21 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
   rect('cave-exit', 40, 20, 0x22c55e, 0x14532d);
   rect('town-gate', 40, 20, 0x38bdf8, 0x0c4a6e);
   circle('hit-spark', 10, 0xfef08a);
+  // Directional melee telegraph wedge
+  if (!scene.textures.exists('melee-arc')) {
+    g.clear();
+    g.fillStyle(0xfef08a, 1);
+    g.slice(16, 16, 16, Phaser.Math.DegToRad(-50), Phaser.Math.DegToRad(50), false);
+    g.fillPath();
+    g.generateTexture('melee-arc', 32, 32);
+  }
   rect('tile-grass', 32, 32, 0x3f6212);
   rect('tile-path', 32, 32, 0x854d0e);
   rect('tile-cave', 32, 32, 0x1e293b);
   rect('tile-cave-alt', 32, 32, 0x0f172a);
+  rect('tile-cave-mid', 32, 32, 0x172554);
+  rect('tile-cave-deep', 32, 32, 0x1a0a2e);
+  rect('tile-cave-path', 32, 32, 0x365314);
 
   g.destroy();
 }

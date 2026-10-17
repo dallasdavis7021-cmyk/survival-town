@@ -54,13 +54,14 @@ npm run preview
 
 **Cave**
 
-- `WASD` / arrows — move
-- `SPACE` — melee attack
-- `E` — mine nearby ore nodes
-- Walk into the south **RETURN TO TOWN** exit to go back (inventory and HP persist)
+- `WASD` / arrows — move (slowed during melee wind-up / recovery)
+- `SPACE` — directional melee (wind-up → hit window → recovery; faces last move dir)
+- `E` — mine nearby ore (chip stone while hitting; richer nodes deeper)
+- Three depth tiers northward: Shallow → Depths → Abyss (harder foes, better ore / crystal, tighter light)
+- Follow the marked south path to **RETURN TO TOWN** — inventory & stats auto-save via `GameState`
 
 Town is an absolute safe zone: hostiles never spawn or pursue there.
 
 ## v0 notes
 
-Programmatic colored shape textures only — no sprite sheets yet. Fog of war is a simple radial light mask in the cave. Deep cave tiers, NPC economy, and polished UI are out of scope for this scaffold.
+Programmatic colored shape textures only — no sprite sheets yet. NPC economy and polished UI remain out of scope.
