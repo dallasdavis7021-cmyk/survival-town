@@ -1,6 +1,6 @@
 export type InventoryItemId = 'wood' | 'stone' | 'ore' | 'scrap';
 
-export type StructureKind = 'house' | 'bench' | 'wall' | 'light';
+export type StructureKind = 'house' | 'bench' | 'wall' | 'light' | 'decoration';
 
 export interface PlacedStructure {
   id: string;
@@ -35,10 +35,10 @@ const DEFAULT_STATE: PersistedState = {
     speed: 160,
   },
   inventory: {
-    wood: 8,
-    stone: 4,
-    ore: 0,
-    scrap: 0,
+    wood: 16,
+    stone: 10,
+    ore: 2,
+    scrap: 2,
   },
   structures: [],
   lastScene: 'TownScene',
@@ -86,11 +86,16 @@ export class GameState {
     this.queueSave();
   }
 
+  /** Returns true if every listed cost can be paid from current inventory. */
+  canAfford(costs: Partial<Record<InventoryItemId, number>>): boolean {
+    return (Object.entries(costs) as [InventoryItemId, number][]).every(
+      ([id, cost]) => (this.data.inventory[id] ?? 0) >= cost,
+    );
+  }
+
   spendItems(costs: Partial<Record<InventoryItemId, number>>): boolean {
-    for (const [id, cost] of Object.entries(costs) as [InventoryItemId, number][]) {
-      if ((this.data.inventory[id] ?? 0) < cost) {
-        return false;
-      }
+    if (!this.canAfford(costs)) {
+      return false;
     }
 
     for (const [id, cost] of Object.entries(costs) as [InventoryItemId, number][]) {
@@ -99,6 +104,14 @@ export class GameState {
 
     this.queueSave();
     return true;
+  }
+
+  /** Refund materials into inventory (e.g. after removing a structure). */
+  refundItems(costs: Partial<Record<InventoryItemId, number>>): void {
+    for (const [id, amount] of Object.entries(costs) as [InventoryItemId, number][]) {
+      this.data.inventory[id] = (this.data.inventory[id] ?? 0) + amount;
+    }
+    this.queueSave();
   }
 
   heal(amount: number): void {
@@ -119,6 +132,16 @@ export class GameState {
   addStructure(structure: PlacedStructure): void {
     this.data.structures.push(structure);
     this.queueSave();
+  }
+
+  removeStructure(id: string): PlacedStructure | null {
+    const index = this.data.structures.findIndex((s) => s.id === id);
+    if (index < 0) {
+      return null;
+    }
+    const [removed] = this.data.structures.splice(index, 1);
+    this.queueSave();
+    return removed ?? null;
   }
 
   reset(): void {

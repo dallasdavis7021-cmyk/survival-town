@@ -40,6 +40,14 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
   rect('bench', 30, 30, 0xa16207, 0x713f12);
   rect('wall', 30, 30, 0x64748b, 0x1e293b);
   rect('light', 30, 30, 0xfbbf24, 0xb45309);
+  rect('decoration', 30, 30, 0xc084fc, 0x6b21a8);
+  // Ghost cell outline frame (drawn under preview)
+  if (!scene.textures.exists('grid-cell')) {
+    g.clear();
+    g.lineStyle(2, 0xffffff, 1);
+    g.strokeRect(1, 1, 30, 30);
+    g.generateTexture('grid-cell', 32, 32);
+  }
   rect('cave-exit', 40, 20, 0x22c55e, 0x14532d);
   rect('town-gate', 40, 20, 0x38bdf8, 0x0c4a6e);
   circle('hit-spark', 10, 0xfef08a);
