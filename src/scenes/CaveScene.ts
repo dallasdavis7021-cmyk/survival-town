@@ -1,8 +1,14 @@
 import Phaser from 'phaser';
+import {
+  buildWallRects,
+  CAVE_TILE,
+  parseCaveLayout,
+  tierAtWorldY,
+  type ParsedCaveMap,
+} from '../maps/caveLayout';
 import { gameState, type InventoryItemId } from '../state/GameState';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
-import { GRID_SIZE } from '../systems/PlacementManager';
 import {
   cycleTool,
   getActiveTool,
@@ -12,9 +18,6 @@ import {
 } from '../systems/PlayerTools';
 import { ensureShapeTextures } from '../utils/textures';
 
-/** North = deep, south = exit / shallow. */
-const MAP_W = 42 * GRID_SIZE;
-const MAP_H = 48 * GRID_SIZE;
 const MINE_RANGE = 56;
 
 type CaveTier = 1 | 2 | 3;
@@ -27,7 +30,9 @@ interface OreNodeData {
 }
 
 export class CaveScene extends Phaser.Scene {
+  private map!: ParsedCaveMap;
   private player!: Phaser.Physics.Arcade.Sprite;
+  private walls!: Phaser.Physics.Arcade.StaticGroup;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private wasd!: {
     W: Phaser.Input.Keyboard.Key;
@@ -59,22 +64,28 @@ export class CaveScene extends Phaser.Scene {
   create(): void {
     ensureShapeTextures(this);
     this.ensureLightMasks();
+    this.map = parseCaveLayout();
     gameState.setLastScene('CaveScene');
     this.transitioning = false;
     this.runLoot = {};
     this.tool = getActiveTool();
 
-    this.cameras.main.setBackgroundColor('#020617');
-    this.physics.world.setBounds(0, 0, MAP_W, MAP_H);
-    this.cameras.main.setBounds(0, 0, MAP_W, MAP_H);
+    // Darker red void mass as camera clear color
+    this.cameras.main.setBackgroundColor('#2a0808');
+    this.physics.world.setBounds(0, 0, this.map.width, this.map.height);
+    this.cameras.main.setBounds(0, 0, this.map.width, this.map.height);
 
-    this.drawCaveFloor();
-    this.drawExitPath();
+    this.drawWalkwayMap();
+    this.walls = this.buildWallCollision();
 
-    this.player = this.physics.add.sprite(MAP_W / 2, MAP_H - 72, 'player');
+    this.player = this.physics.add.sprite(this.map.spawn.x, this.map.spawn.y, 'player');
     this.player.setCollideWorldBounds(true);
     this.player.setDepth(10);
+    const playerBody = this.player.body as Phaser.Physics.Arcade.Body;
+    playerBody.setSize(18, 18);
+    playerBody.setOffset(2, 2);
 
+    this.physics.add.collider(this.player, this.walls);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
     this.hostiles = this.physics.add.group();
@@ -90,19 +101,31 @@ export class CaveScene extends Phaser.Scene {
       onPlayerHurt: () => this.refreshHud(),
     });
 
-    this.spawnTierContent();
+    this.physics.add.collider(this.hostiles, this.walls);
+    this.spawnFromMap();
 
-    const exit = this.add.image(MAP_W / 2, MAP_H - 24, 'cave-exit').setDepth(6);
+    const exit = this.add.image(this.map.exit.x, this.map.exit.y, 'cave-exit').setDepth(6);
     this.physics.add.existing(exit, true);
     this.physics.add.overlap(this.player, exit, () => this.returnToTown());
 
     this.add
-      .text(MAP_W / 2, MAP_H - 52, 'RETURN TO TOWN — loot is saved', {
+      .text(this.map.exit.x, this.map.exit.y - 28, 'RETURN TO TOWN', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '12px',
         color: '#bbf7d0',
         backgroundColor: '#14532d99',
         padding: { x: 6, y: 3 },
+      })
+      .setOrigin(0.5)
+      .setDepth(7);
+
+    this.add
+      .text(this.map.spawn.x, this.map.spawn.y + 28, 'ENTRANCE', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#86efac',
+        backgroundColor: '#052e1699',
+        padding: { x: 4, y: 2 },
       })
       .setOrigin(0.5)
       .setDepth(7);
@@ -119,7 +142,7 @@ export class CaveScene extends Phaser.Scene {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '13px',
         color: '#e2e8f0',
-        backgroundColor: '#0f172acc',
+        backgroundColor: '#1a0505cc',
         padding: { x: 8, y: 6 },
       })
       .setScrollFactor(0)
@@ -129,8 +152,8 @@ export class CaveScene extends Phaser.Scene {
       .text(12, this.scale.height - 52, '', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '12px',
-        color: '#cbd5e1',
-        backgroundColor: '#0f172acc',
+        color: '#fecaca',
+        backgroundColor: '#1a0505cc',
         padding: { x: 8, y: 5 },
       })
       .setScrollFactor(0)
@@ -157,6 +180,8 @@ export class CaveScene extends Phaser.Scene {
       this.fogRt.setSize(gameSize.width, gameSize.height);
     });
 
+    this.currentTier = tierAtWorldY(this.player.y, this.map.height);
+    this.applyTierLight();
     this.refreshHud();
   }
 
@@ -185,6 +210,134 @@ export class CaveScene extends Phaser.Scene {
     this.refreshHud();
   }
 
+  private drawWalkwayMap(): void {
+    const { cols, rows, walkable } = this.map;
+    const deepCutoff = Math.floor(rows * 0.34);
+
+    for (let ty = 0; ty < rows; ty += 1) {
+      for (let tx = 0; tx < cols; tx += 1) {
+        const cx = tx * CAVE_TILE + CAVE_TILE / 2;
+        const cy = ty * CAVE_TILE + CAVE_TILE / 2;
+        if (!walkable[ty][tx]) {
+          const rock = ty < deepCutoff ? 'cave-rock-deep' : 'cave-rock';
+          this.add.image(cx, cy, rock).setDepth(0);
+          continue;
+        }
+
+        const floor = ((tx + ty) & 1) === 0 ? 'cave-floor' : 'cave-floor-dim';
+        this.add.image(cx, cy, floor).setDepth(1);
+
+        // Crisp light outlines where floor meets rock
+        const up = ty === 0 || !walkable[ty - 1][tx];
+        const down = ty === rows - 1 || !walkable[ty + 1][tx];
+        const left = tx === 0 || !walkable[ty][tx - 1];
+        const right = tx === cols - 1 || !walkable[ty][tx + 1];
+
+        if (up) {
+          this.add.image(cx, ty * CAVE_TILE + 1, 'cave-edge-h').setDepth(2);
+        }
+        if (down) {
+          this.add.image(cx, (ty + 1) * CAVE_TILE - 1, 'cave-edge-h').setDepth(2);
+        }
+        if (left) {
+          this.add.image(tx * CAVE_TILE + 1, cy, 'cave-edge-v').setDepth(2);
+        }
+        if (right) {
+          this.add.image((tx + 1) * CAVE_TILE - 1, cy, 'cave-edge-v').setDepth(2);
+        }
+      }
+    }
+
+    // Tier banners on spine
+    this.addTierBanner(this.map.width / 2, this.map.height * 0.12, 'TIER 3 — ABYSS', '#fca5a5');
+    this.addTierBanner(this.map.width / 2, this.map.height * 0.45, 'TIER 2 — DEPTHS', '#fde68a');
+    this.addTierBanner(this.map.width / 2, this.map.height * 0.78, 'TIER 1 — SHALLOW', '#86efac');
+  }
+
+  private buildWallCollision(): Phaser.Physics.Arcade.StaticGroup {
+    const group = this.physics.add.staticGroup();
+    const rects = buildWallRects(this.map.walkable, CAVE_TILE);
+
+    for (const r of rects) {
+      // Invisible static bodies (merged wall runs) — player & hostiles collide
+      const wall = group.create(r.x + r.w / 2, r.y + r.h / 2, 'cave-rock') as Phaser.Physics.Arcade.Sprite;
+      wall.setDisplaySize(r.w, r.h);
+      wall.setVisible(false);
+      wall.refreshBody();
+    }
+
+    return group;
+  }
+
+  private spawnFromMap(): void {
+    for (const h of this.map.hostiles) {
+      const cfg =
+        h.tier === 3
+          ? {
+              tier: 3 as const,
+              hp: 65,
+              damage: 15,
+              speed: 115,
+              aggroRange: 200,
+              attackRange: 36,
+              knockback: 400,
+              attackCooldownMs: 650,
+            }
+          : h.tier === 2
+            ? {
+                tier: 2 as const,
+                hp: 42,
+                damage: 11,
+                speed: 100,
+                aggroRange: 180,
+                knockback: 360,
+              }
+            : {
+                tier: 1 as const,
+                hp: 28,
+                damage: 7,
+                speed: 85,
+                aggroRange: 150,
+              };
+
+      const hostile = this.combat.spawnHostile(h.point.x, h.point.y, cfg);
+      const body = hostile.body as Phaser.Physics.Arcade.Body;
+      body.setSize(16, 16);
+      body.setOffset(3, 3);
+    }
+
+    for (const o of this.map.ores) {
+      this.spawnOre(o.point.x, o.point.y, o.tier, o.kind);
+    }
+  }
+
+  private addTierBanner(x: number, y: number, label: string, color: string): void {
+    this.add
+      .text(x, y, label, {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color,
+        backgroundColor: '#1a0505aa',
+        padding: { x: 6, y: 2 },
+      })
+      .setOrigin(0.5)
+      .setDepth(4);
+  }
+
+  private spawnOre(
+    x: number,
+    y: number,
+    tier: CaveTier,
+    kind: OreNodeData['kind'],
+  ): void {
+    const hp = kind === 'ore-rare' ? 5 : kind === 'ore-rich' ? 4 : 3;
+    const node = this.oreNodes.create(x, y, kind) as Phaser.Physics.Arcade.Sprite;
+    const data: OreNodeData = { hp, maxHp: hp, tier, kind };
+    node.setData('ore', data);
+    node.setDepth(5);
+    node.refreshBody();
+  }
+
   private onRightClick(pointer: Phaser.Input.Pointer): void {
     if (this.tool === 'weapon') {
       this.combat.tryStartAttack(this.time.now);
@@ -197,31 +350,23 @@ export class CaveScene extends Phaser.Scene {
       return;
     }
 
-    // Building tool in cave — structures only in town
     this.floatText(this.player.x, this.player.y - 24, 'Build in town only', '#fde68a');
   }
 
-  private tierAtY(y: number): CaveTier {
-    const t = y / MAP_H;
-    if (t < 0.34) {
-      return 3;
-    }
-    if (t < 0.62) {
-      return 2;
-    }
-    return 1;
-  }
-
   private updateTierFromPosition(): void {
-    const next = this.tierAtY(this.player.y);
+    const next = tierAtWorldY(this.player.y, this.map.height);
     if (next === this.currentTier) {
       return;
     }
     this.currentTier = next;
-    if (next === 1) {
+    this.applyTierLight();
+  }
+
+  private applyTierLight(): void {
+    if (this.currentTier === 1) {
       this.lightRadius = 168;
       this.lightMaskKey = 'light-mask-wide';
-    } else if (next === 2) {
+    } else if (this.currentTier === 2) {
       this.lightRadius = 128;
       this.lightMaskKey = 'light-mask-mid';
     } else {
@@ -249,101 +394,6 @@ export class CaveScene extends Phaser.Scene {
     make('light-mask-wide', 168);
     make('light-mask-mid', 128);
     make('light-mask-tight', 92);
-  }
-
-  private spawnTierContent(): void {
-    const shallowHostiles = [
-      { x: 10 * GRID_SIZE, y: 38 * GRID_SIZE },
-      { x: 30 * GRID_SIZE, y: 40 * GRID_SIZE },
-      { x: 20 * GRID_SIZE, y: 34 * GRID_SIZE },
-    ];
-    for (const p of shallowHostiles) {
-      this.combat.spawnHostile(p.x, p.y, {
-        tier: 1,
-        hp: 28,
-        damage: 7,
-        speed: 85,
-        aggroRange: 150,
-      });
-    }
-    this.spawnOre(8 * GRID_SIZE, 36 * GRID_SIZE, 1, 'ore-node');
-    this.spawnOre(28 * GRID_SIZE, 37 * GRID_SIZE, 1, 'ore-node');
-    this.spawnOre(16 * GRID_SIZE, 42 * GRID_SIZE, 1, 'ore-node');
-
-    const midHostiles = [
-      { x: 8 * GRID_SIZE, y: 24 * GRID_SIZE },
-      { x: 32 * GRID_SIZE, y: 26 * GRID_SIZE },
-      { x: 18 * GRID_SIZE, y: 22 * GRID_SIZE },
-      { x: 26 * GRID_SIZE, y: 30 * GRID_SIZE },
-    ];
-    for (const p of midHostiles) {
-      this.combat.spawnHostile(p.x, p.y, {
-        tier: 2,
-        hp: 42,
-        damage: 11,
-        speed: 100,
-        aggroRange: 190,
-        knockback: 360,
-      });
-    }
-    this.spawnOre(12 * GRID_SIZE, 28 * GRID_SIZE, 2, 'ore-rich');
-    this.spawnOre(30 * GRID_SIZE, 23 * GRID_SIZE, 2, 'ore-rich');
-    this.spawnOre(20 * GRID_SIZE, 26 * GRID_SIZE, 2, 'ore-node');
-    this.spawnOre(6 * GRID_SIZE, 20 * GRID_SIZE, 2, 'ore-rich');
-
-    const deepHostiles = [
-      { x: 10 * GRID_SIZE, y: 8 * GRID_SIZE },
-      { x: 30 * GRID_SIZE, y: 10 * GRID_SIZE },
-      { x: 20 * GRID_SIZE, y: 6 * GRID_SIZE },
-      { x: 14 * GRID_SIZE, y: 14 * GRID_SIZE },
-      { x: 28 * GRID_SIZE, y: 16 * GRID_SIZE },
-    ];
-    for (const p of deepHostiles) {
-      this.combat.spawnHostile(p.x, p.y, {
-        tier: 3,
-        hp: 65,
-        damage: 15,
-        speed: 115,
-        aggroRange: 220,
-        attackRange: 38,
-        knockback: 400,
-        attackCooldownMs: 650,
-      });
-    }
-    this.spawnOre(8 * GRID_SIZE, 10 * GRID_SIZE, 3, 'ore-rare');
-    this.spawnOre(32 * GRID_SIZE, 8 * GRID_SIZE, 3, 'ore-rare');
-    this.spawnOre(22 * GRID_SIZE, 12 * GRID_SIZE, 3, 'ore-rich');
-    this.spawnOre(16 * GRID_SIZE, 4 * GRID_SIZE, 3, 'ore-rare');
-
-    this.addTierBanner(MAP_W / 2, MAP_H * 0.78, 'TIER 1 — SHALLOW', '#86efac');
-    this.addTierBanner(MAP_W / 2, MAP_H * 0.48, 'TIER 2 — DEPTHS', '#fde68a');
-    this.addTierBanner(MAP_W / 2, MAP_H * 0.16, 'TIER 3 — ABYSS', '#fca5a5');
-  }
-
-  private addTierBanner(x: number, y: number, label: string, color: string): void {
-    this.add
-      .text(x, y, label, {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color,
-        backgroundColor: '#020617aa',
-        padding: { x: 6, y: 2 },
-      })
-      .setOrigin(0.5)
-      .setDepth(4);
-  }
-
-  private spawnOre(
-    x: number,
-    y: number,
-    tier: CaveTier,
-    kind: OreNodeData['kind'],
-  ): void {
-    const hp = kind === 'ore-rare' ? 5 : kind === 'ore-rich' ? 4 : 3;
-    const node = this.oreNodes.create(x, y, kind) as Phaser.Physics.Arcade.Sprite;
-    const data: OreNodeData = { hp, maxHp: hp, tier, kind };
-    node.setData('ore', data);
-    node.refreshBody();
   }
 
   private onHostileKilled(hostile: HostileSprite, x: number, y: number): void {
@@ -400,7 +450,6 @@ export class CaveScene extends Phaser.Scene {
     this.player.setVelocity(vx * speed, vy * speed);
   }
 
-  /** Mine ore under cursor if in range, else nearest in facing / near player. */
   private tryMineAt(cursorX: number, cursorY: number): void {
     if (this.combat.isAttackLocked) {
       return;
@@ -424,7 +473,6 @@ export class CaveScene extends Phaser.Scene {
       ) ?? null;
 
     if (!target) {
-      // Prefer node in facing direction
       const face = this.combat.facingVector.lengthSq() > 0 ? this.combat.facingVector : this.facing;
       let bestScore = -Infinity;
       for (const n of inPlayerRange) {
@@ -512,12 +560,13 @@ export class CaveScene extends Phaser.Scene {
       this.fogRt.setSize(cam.width, cam.height);
     }
 
-    const baseAlpha = this.currentTier === 1 ? 0.78 : this.currentTier === 2 ? 0.9 : 0.97;
+    // Near-black fog so darker-red rock still reads in lit radius
+    const baseAlpha = this.currentTier === 1 ? 0.82 : this.currentTier === 2 ? 0.92 : 0.97;
     this.fogRt.clear();
-    this.fogRt.fill(0x020617, baseAlpha);
+    this.fogRt.fill(0x050202, baseAlpha);
     this.fogRt.erase(this.lightMaskKey, localX - this.lightRadius, localY - this.lightRadius);
     if (this.currentTier >= 2) {
-      this.fogRt.fill(0x000000, this.currentTier === 3 ? 0.12 : 0.06);
+      this.fogRt.fill(0x000000, this.currentTier === 3 ? 0.14 : 0.07);
       this.fogRt.erase(this.lightMaskKey, localX - this.lightRadius, localY - this.lightRadius);
     }
   }
@@ -538,11 +587,11 @@ export class CaveScene extends Phaser.Scene {
         `CAVE TIER ${this.currentTier} — ${tierName}  ·  light ${this.lightRadius}px`,
         `HP ${gameState.player.hp}/${gameState.player.maxHp}  ·  Active: ${TOOL_LABELS[this.tool]}${this.tool === 'weapon' ? ` (${swing})` : ''}`,
         `Inv: wood ${inv.wood} stone ${inv.stone} ore ${inv.ore} scrap ${inv.scrap} crystal ${inv.crystal}`,
-        `Picked up this run: ${runBits || '—'}  ·  south exit → town`,
+        `Picked up this run: ${runBits || '—'}  ·  follow path → RETURN TO TOWN`,
       ].join('\n'),
     );
 
-    this.help.setText(`${toolHelpLine(this.tool)}  ·  WASD move`);
+    this.help.setText(`${toolHelpLine(this.tool)}  ·  WASD move (paths only)`);
     this.help.setPosition(12, this.scale.height - 52);
   }
 
@@ -580,40 +629,5 @@ export class CaveScene extends Phaser.Scene {
     gameState.saveNow();
     this.floatText(this.player.x, this.player.y, 'Knocked out — returning…', '#fca5a5');
     this.time.delayedCall(700, () => this.scene.start('TownScene'));
-  }
-
-  private drawCaveFloor(): void {
-    for (let y = 0; y < MAP_H; y += GRID_SIZE) {
-      for (let x = 0; x < MAP_W; x += GRID_SIZE) {
-        const tier = this.tierAtY(y + GRID_SIZE / 2);
-        const alt = (x / GRID_SIZE + y / GRID_SIZE) % 2 === 0;
-        let key = alt ? 'tile-cave' : 'tile-cave-alt';
-        if (tier === 2) {
-          key = alt ? 'tile-cave-mid' : 'tile-cave';
-        } else if (tier === 3) {
-          key = alt ? 'tile-cave-deep' : 'tile-cave-alt';
-        }
-        this.add.image(x + GRID_SIZE / 2, y + GRID_SIZE / 2, key).setDepth(0);
-      }
-    }
-  }
-
-  private drawExitPath(): void {
-    const cx = MAP_W / 2;
-    for (let y = MAP_H - GRID_SIZE; y > MAP_H * 0.55; y -= GRID_SIZE) {
-      this.add.image(cx, y + GRID_SIZE / 2, 'tile-cave-path').setDepth(1).setAlpha(0.9);
-      this.add.image(cx - GRID_SIZE, y + GRID_SIZE / 2, 'tile-cave-path').setDepth(1).setAlpha(0.55);
-      this.add.image(cx + GRID_SIZE, y + GRID_SIZE / 2, 'tile-cave-path').setDepth(1).setAlpha(0.55);
-    }
-
-    for (let y = MAP_H - 120; y > MAP_H * 0.6; y -= 96) {
-      this.add
-        .text(cx + 36, y, '↓ TOWN', {
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          fontSize: '10px',
-          color: '#86efac',
-        })
-        .setDepth(4);
-    }
   }
 }
