@@ -7,6 +7,8 @@ import {
   type ParsedCaveMap,
 } from '../maps/caveLayout';
 import { gameState, type InventoryItemId } from '../state/GameState';
+import { ensureBiomeAssetsLoaded } from '../systems/BiomeAssets';
+import { decorateCaveTrees } from '../systems/BiomeDecorator';
 import { CaveGemSpawner } from '../systems/CaveGemSpawner';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
@@ -108,12 +110,16 @@ export class CaveScene extends Phaser.Scene {
     this.physics.add.collider(this.hostiles, this.walls);
     this.spawnFromMap();
 
-    void ensureMineralTexturesLoaded(this).then(() => {
-      if (!this.sys.isActive()) {
-        return;
-      }
-      this.gems.populate();
-    });
+    void Promise.all([ensureMineralTexturesLoaded(this), ensureBiomeAssetsLoaded(this)]).then(
+      () => {
+        if (!this.sys.isActive()) {
+          return;
+        }
+        this.applyCaveFloorTextures();
+        this.gems.populate();
+        decorateCaveTrees(this, this.map.walkable, CAVE_TILE);
+      },
+    );
 
     const exit = this.add.image(this.map.exit.x, this.map.exit.y, 'cave-exit').setDepth(6);
     this.physics.add.existing(exit, true);
@@ -235,8 +241,13 @@ export class CaveScene extends Phaser.Scene {
           continue;
         }
 
+        // Placeholder until floor-cave-tex loads (restamped in applyCaveFloorTextures)
         const floor = ((tx + ty) & 1) === 0 ? 'cave-floor' : 'cave-floor-dim';
-        this.add.image(cx, cy, floor).setDepth(1);
+        this.add
+          .image(cx, cy, floor)
+          .setDepth(1)
+          .setDisplaySize(CAVE_TILE + 1, CAVE_TILE + 1)
+          .setData('caveFloor', true);
 
         // Crisp light outlines where floor meets rock
         const up = ty === 0 || !walkable[ty - 1][tx];
@@ -263,6 +274,33 @@ export class CaveScene extends Phaser.Scene {
     this.addTierBanner(this.map.width / 2, this.map.height * 0.12, 'TIER 3 — ABYSS', '#fca5a5');
     this.addTierBanner(this.map.width / 2, this.map.height * 0.45, 'TIER 2 — DEPTHS', '#fde68a');
     this.addTierBanner(this.map.width / 2, this.map.height * 0.78, 'TIER 1 — SHALLOW', '#86efac');
+  }
+
+  /** Stamp art-directed cave floor texture onto all walkable tiles. */
+  private applyCaveFloorTextures(): void {
+    if (!this.textures.exists('floor-cave-tex')) {
+      return;
+    }
+    const { cols, rows, walkable } = this.map;
+    for (let ty = 0; ty < rows; ty += 1) {
+      for (let tx = 0; tx < cols; tx += 1) {
+        if (!walkable[ty][tx]) {
+          continue;
+        }
+        const cx = tx * CAVE_TILE + CAVE_TILE / 2;
+        const cy = ty * CAVE_TILE + CAVE_TILE / 2;
+        const key =
+          ((tx + ty) & 1) === 0
+            ? 'floor-cave-tex'
+            : this.textures.exists('floor-cave-tex-b')
+              ? 'floor-cave-tex-b'
+              : 'floor-cave-tex';
+        this.add
+          .image(cx, cy, key)
+          .setDepth(1)
+          .setDisplaySize(CAVE_TILE + 1, CAVE_TILE + 1);
+      }
+    }
   }
 
   private buildWallCollision(): Phaser.Physics.Arcade.StaticGroup {

@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import { gameState } from '../state/GameState';
+import { ensureBiomeAssetsLoaded } from '../systems/BiomeAssets';
+import { decorateOverworld } from '../systems/BiomeDecorator';
 import { LootDrops } from '../systems/LootDrops';
 import { ensureMineralTexturesLoaded } from '../systems/Minerals';
 import { GRID_SIZE, PlacementManager } from '../systems/PlacementManager';
@@ -12,21 +14,18 @@ import {
 } from '../systems/PlayerTools';
 import { WildernessMetalSpawner } from '../systems/WildernessMetalSpawner';
 import { ensureShapeTextures } from '../utils/textures';
+import {
+  biomeAt,
+  biomeLabel,
+  isSafeGrid,
+  SAFE_ZONE,
+  WORLD_COLS,
+  WORLD_ROWS,
+} from '../world/Biomes';
 
-/** Full overworld including wilderness ring. */
-const WORLD_COLS = 48;
-const WORLD_ROWS = 36;
 const MAP_W = WORLD_COLS * GRID_SIZE;
 const MAP_H = WORLD_ROWS * GRID_SIZE;
-
-/** Absolute safe zone (town) — no wilderness minerals, no hostiles. */
-const SAFE = {
-  x0: 10,
-  y0: 8,
-  x1: 37,
-  y1: 27,
-};
-
+const SAFE = SAFE_ZONE;
 const MINE_RANGE = 52;
 
 export class TownScene extends Phaser.Scene {
@@ -49,6 +48,7 @@ export class TownScene extends Phaser.Scene {
   private tool: ToolId = getActiveTool();
   private transitioning = false;
   private facing = new Phaser.Math.Vector2(0, -1);
+  private biomesReady = false;
 
   constructor() {
     super('TownScene');
@@ -65,15 +65,15 @@ export class TownScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, MAP_W, MAP_H);
     this.cameras.main.setBounds(0, 0, MAP_W, MAP_H);
 
-    this.drawGround();
+    // Temporary solid floors until biome assets finish loading
+    this.drawFallbackGround();
 
     const structures = this.add.group();
     this.placement = new PlacementManager(this, structures, {
-      canBuildAt: (gx, gy) => this.isSafeGrid(gx, gy),
+      canBuildAt: (gx, gy) => isSafeGrid(gx, gy, SAFE),
     });
     this.loot = new LootDrops(this);
 
-    // Starter scraps only inside safe zone
     const safeCx = ((SAFE.x0 + SAFE.x1) / 2) * GRID_SIZE;
     const safeCy = ((SAFE.y0 + SAFE.y1) / 2) * GRID_SIZE;
     this.loot.drop(safeCx - 48, safeCy + 80, 'wood', 2);
@@ -116,15 +116,12 @@ export class TownScene extends Phaser.Scene {
       .setDepth(102)
       .setOrigin(1, 0);
 
-    const spawnX = safeCx;
-    const spawnY = safeCy + 40;
-    this.player = this.physics.add.sprite(spawnX, spawnY, 'player');
+    this.player = this.physics.add.sprite(safeCx, safeCy + 40, 'player');
     this.player.setCollideWorldBounds(true);
     this.player.setDepth(10);
 
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
-    // Cave gate on north edge of safe zone
     const gateX = safeCx;
     const gateY = SAFE.y0 * GRID_SIZE + 16;
     const gate = this.add.image(gateX, gateY, 'town-gate').setDepth(6);
@@ -140,26 +137,7 @@ export class TownScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(7);
 
-    this.add
-      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 2.5, 'TOWN SAFE ZONE', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#bbf7d0',
-        backgroundColor: '#14532d66',
-        padding: { x: 6, y: 2 },
-      })
-      .setOrigin(0.5)
-      .setDepth(3);
-
-    this.add
-      .text(GRID_SIZE * 3, GRID_SIZE * 2, 'WILDERNESS', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#fde68a',
-        backgroundColor: '#42200688',
-        padding: { x: 6, y: 2 },
-      })
-      .setDepth(3);
+    this.addBiomeLabels(safeCx);
 
     const keyboard = this.input.keyboard;
     if (!keyboard) {
@@ -178,12 +156,18 @@ export class TownScene extends Phaser.Scene {
       this.onRightClick(pointer);
     });
 
-    void ensureMineralTexturesLoaded(this).then(() => {
-      if (!this.sys.isActive()) {
-        return;
-      }
-      this.metals.populate();
-    });
+    void Promise.all([ensureBiomeAssetsLoaded(this), ensureMineralTexturesLoaded(this)]).then(
+      () => {
+        if (!this.sys.isActive()) {
+          return;
+        }
+        if (!this.biomesReady) {
+          decorateOverworld(this, { safe: SAFE, seed: 0x51a7e });
+          this.biomesReady = true;
+        }
+        this.metals.populate();
+      },
+    );
 
     this.applyTool();
     this.refreshHud();
@@ -213,21 +197,60 @@ export class TownScene extends Phaser.Scene {
     this.refreshHud();
   }
 
-  private isSafeGrid(gx: number, gy: number): boolean {
-    return gx >= SAFE.x0 && gx <= SAFE.x1 && gy >= SAFE.y0 && gy <= SAFE.y1;
+  private addBiomeLabels(safeCx: number): void {
+    this.add
+      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 2.5, 'TOWN SAFE ZONE', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#bbf7d0',
+        backgroundColor: '#14532d66',
+        padding: { x: 6, y: 2 },
+      })
+      .setOrigin(0.5)
+      .setDepth(3);
+
+    this.add
+      .text(GRID_SIZE * 4, GRID_SIZE * 3, 'SNOW', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#e2e8f0',
+        backgroundColor: '#33415588',
+        padding: { x: 6, y: 2 },
+      })
+      .setDepth(3);
+
+    this.add
+      .text(GRID_SIZE * 2, MAP_H / 2, 'JUNGLE', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#bbf7d0',
+        backgroundColor: '#14532d88',
+        padding: { x: 6, y: 2 },
+      })
+      .setDepth(3);
+
+    this.add
+      .text(MAP_W - GRID_SIZE * 5, MAP_H / 2, 'AUTUMN', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#ffedd5',
+        backgroundColor: '#9a341288',
+        padding: { x: 6, y: 2 },
+      })
+      .setDepth(3);
   }
 
   private isInSafeZone(worldX: number, worldY: number): boolean {
     const gx = Math.floor(worldX / GRID_SIZE);
     const gy = Math.floor(worldY / GRID_SIZE);
-    return this.isSafeGrid(gx, gy);
+    return isSafeGrid(gx, gy, SAFE);
   }
 
   private collectWildernessCells(): { gx: number; gy: number; x: number; y: number }[] {
     const cells: { gx: number; gy: number; x: number; y: number }[] = [];
     for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
       for (let gx = 0; gx < WORLD_COLS; gx += 1) {
-        if (this.isSafeGrid(gx, gy)) {
+        if (isSafeGrid(gx, gy, SAFE)) {
           continue;
         }
         cells.push({
@@ -248,9 +271,6 @@ export class TownScene extends Phaser.Scene {
 
   private onRightClick(pointer: Phaser.Input.Pointer): void {
     if (this.tool === 'building') {
-      if (!this.isInSafeZone(this.player.x, this.player.y) && this.placement.isBuildMode) {
-        // Still allow ghost place attempt; PlacementManager blocks unsafe tiles
-      }
       this.placement.contextAction();
       this.refreshHud();
       return;
@@ -265,7 +285,6 @@ export class TownScene extends Phaser.Scene {
       return;
     }
 
-    // Mining tool — wilderness metals
     const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     if (this.metals.tryMineNear(world.x, world.y, this.player.x, this.player.y, MINE_RANGE)) {
       this.refreshHud();
@@ -312,7 +331,10 @@ export class TownScene extends Phaser.Scene {
 
   private refreshHud(): void {
     const inv = gameState.inventory;
-    const inSafe = this.isInSafeZone(this.player.x, this.player.y);
+    const gx = Math.floor(this.player.x / GRID_SIZE);
+    const gy = Math.floor(this.player.y / GRID_SIZE);
+    const biome = biomeAt(gx, gy, SAFE);
+    const inSafe = biome === 'safe';
     const buildExtra =
       this.tool === 'building'
         ? ` · ${this.placement.selectedLabel} (${this.placement.selectedCost}) · LMB/R remove`
@@ -321,26 +343,30 @@ export class TownScene extends Phaser.Scene {
     this.hud.setText(
       [
         inSafe
-          ? 'TOWN SAFE ZONE — no hostiles · no wilderness metals'
-          : 'WILDERNESS — gold / iron / silver (RMB mine)',
+          ? 'TOWN SAFE ZONE — grass · village trees · no metals/hostiles'
+          : `${biomeLabel(biome).toUpperCase()} BIOME — ${biome === 'snow' ? 'snow floor' : 'grass + trees'}${biome === 'autumn' ? ' + leaves' : ''}`,
         `HP ${gameState.player.hp}/${gameState.player.maxHp}`,
         `Inv: wood ${inv.wood} stone ${inv.stone} ore ${inv.ore}  gems ${inv.diamond}d/${inv.emerald}e/${inv.sapphire}s  metals ${inv.gold}g/${inv.iron}i/${inv.silver}s`,
         `Active: ${TOOL_LABELS[this.tool]}${buildExtra}`,
       ].join('\n'),
     );
 
-    this.help.setText(
-      `${toolHelpLine(this.tool)}  ·  WASD move  ·  north gate → cave`,
-    );
+    this.help.setText(`${toolHelpLine(this.tool)}  ·  WASD move  ·  north gate → cave`);
     this.help.setPosition(12, this.scale.height - (this.tool === 'building' ? 140 : 52));
 
+    const label =
+      biome === 'safe' ? 'SAFE' : biome === 'jungle' ? 'JUNGLE' : biome === 'autumn' ? 'AUTUMN' : 'SNOW';
+    const colors: Record<string, { color: string; bg: string }> = {
+      SAFE: { color: '#bbf7d0', bg: '#14532d99' },
+      JUNGLE: { color: '#bbf7d0', bg: '#14532d99' },
+      AUTUMN: { color: '#ffedd5', bg: '#9a341299' },
+      SNOW: { color: '#e2e8f0', bg: '#33415599' },
+    };
+    const c = colors[label];
     this.zoneLabel
-      .setText(inSafe ? 'SAFE' : 'WILD')
+      .setText(label)
       .setPosition(this.scale.width - 12, 12)
-      .setStyle({
-        color: inSafe ? '#bbf7d0' : '#fde68a',
-        backgroundColor: inSafe ? '#14532d99' : '#42200699',
-      });
+      .setStyle({ color: c.color, backgroundColor: c.bg });
   }
 
   private floatHint(msg: string): void {
@@ -367,52 +393,29 @@ export class TownScene extends Phaser.Scene {
     if (this.transitioning) {
       return;
     }
-    // Must be near gate / in safe zone north
     this.transitioning = true;
     gameState.saveNow();
     this.scene.start('CaveScene');
   }
 
-  private drawGround(): void {
+  private drawFallbackGround(): void {
     for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
       for (let gx = 0; gx < WORLD_COLS; gx += 1) {
         const cx = gx * GRID_SIZE + GRID_SIZE / 2;
         const cy = gy * GRID_SIZE + GRID_SIZE / 2;
-        const safe = this.isSafeGrid(gx, gy);
-
-        if (safe) {
-          const path =
-            Math.abs(gx - (SAFE.x0 + SAFE.x1) / 2) < 1.6 ||
-            Math.abs(gy - (SAFE.y0 + SAFE.y1) / 2) < 1;
-          this.add
-            .image(cx, cy, path ? 'tile-path' : 'tile-grass')
-            .setDepth(0)
-            .setAlpha(path ? 0.95 : 0.88);
-        } else {
-          // Wilderness scrub — distinct from town grass
-          const alt = (gx + gy) % 2 === 0;
-          this.add
-            .image(cx, cy, alt ? 'tile-wild-a' : 'tile-wild-b')
-            .setDepth(0)
-            .setAlpha(0.95);
-        }
+        const biome = biomeAt(gx, gy, SAFE);
+        const key =
+          biome === 'snow'
+            ? (gx + gy) % 2 === 0
+              ? 'tile-wild-b'
+              : 'tile-wild-a'
+            : biome === 'safe'
+              ? 'tile-grass'
+              : (gx + gy) % 2 === 0
+                ? 'tile-wild-a'
+                : 'tile-wild-b';
+        this.add.image(cx, cy, key).setDepth(0).setAlpha(0.9);
       }
     }
-
-    // Safe-zone outline
-    const g = this.add.graphics().setDepth(2);
-    g.lineStyle(2, 0x86efac, 0.55);
-    g.strokeRect(
-      SAFE.x0 * GRID_SIZE,
-      SAFE.y0 * GRID_SIZE,
-      (SAFE.x1 - SAFE.x0 + 1) * GRID_SIZE,
-      (SAFE.y1 - SAFE.y0 + 1) * GRID_SIZE,
-    );
-
-    const glow = this.add.graphics().setDepth(1);
-    const safeCx = ((SAFE.x0 + SAFE.x1) / 2) * GRID_SIZE + GRID_SIZE / 2;
-    const safeCy = ((SAFE.y0 + SAFE.y1) / 2) * GRID_SIZE + GRID_SIZE / 2;
-    glow.fillStyle(0x86efac, 0.07);
-    glow.fillCircle(safeCx, safeCy, 200);
   }
 }

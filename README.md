@@ -18,6 +18,7 @@ Top-down browser action RPG / town builder. Explore caves for loot and ore, retu
 | `caveLayout` | Deterministic carved tilemap (rooms/corridors) |
 | `CaveGemSpawner` | Diamond/emerald/sapphire in cave rooms |
 | `WildernessMetalSpawner` | Gold/iron/silver outside town safe zone |
+| `BiomeDecorator` | Overworld biomes (grass/snow/trees/leaves) + sparse cave trees |
 | `PlayerTools` | Shared Mining → Weapon → Building tool cycle |
 | `LootDrops` | Ground pickups collected with E |
 | `PlacementManager` | 32×32 ghost preview, palette, place/remove + refund |
