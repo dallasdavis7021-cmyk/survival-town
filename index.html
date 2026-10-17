@@ -36,5 +36,9 @@
   <body>
     <div id="game"></div>
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      // Allow RMB as in-game tool action (no browser context menu over the canvas).
+      document.addEventListener('contextmenu', (e) => e.preventDefault());
+    </script>
   </body>
 </html>

@@ -26,7 +26,7 @@ export const BUILD_LABELS: Record<StructureKind, string> = {
 
 export const BUILD_ORDER: StructureKind[] = ['house', 'bench', 'wall', 'light', 'decoration'];
 
-type BuildMode = 'off' | 'place' | 'remove';
+type BuildSubMode = 'place' | 'remove';
 
 interface OccupiedCell {
   structure: PlacedStructure;
@@ -43,9 +43,8 @@ interface PaletteSlot {
 }
 
 /**
- * Town-only building UX: 32×32 snap, material costs, ghost preview,
- * clickable structure palette, place + remove-with-refund.
- * No hostile / combat logic lives here.
+ * Town building UX — activated when PlayerTools building mode is selected.
+ * RMB places; left-click or R removes (with material refund).
  */
 export class PlacementManager {
   private scene: Phaser.Scene;
@@ -53,30 +52,28 @@ export class PlacementManager {
   private ghost: Phaser.GameObjects.Image;
   private ghostCell: Phaser.GameObjects.Image;
   private statusText: Phaser.GameObjects.Text;
-  private hudText: Phaser.GameObjects.Text;
   private paletteRoot: Phaser.GameObjects.Container;
+  private paletteTitle!: Phaser.GameObjects.Text;
   private paletteSlots: PaletteSlot[] = [];
-  private placeKey!: Phaser.Input.Keyboard.Key;
-  private cycleKey!: Phaser.Input.Keyboard.Key;
   private removeKey!: Phaser.Input.Keyboard.Key;
   private digitKeys: Phaser.Input.Keyboard.Key[] = [];
-  private mode: BuildMode = 'off';
+  private active = false;
+  private subMode: BuildSubMode = 'place';
   private selected: StructureKind = 'house';
   private occupied = new Map<string, OccupiedCell>();
   private feedbackUntil = 0;
   private feedbackMessage = '';
   private onChanged?: () => void;
   private cursorGrid = { x: 0, y: 0 };
+  private boundPointerDown: (pointer: Phaser.Input.Pointer) => void;
 
   constructor(
     scene: Phaser.Scene,
     structuresLayer: Phaser.GameObjects.Group,
-    hudText: Phaser.GameObjects.Text,
     onChanged?: () => void,
   ) {
     this.scene = scene;
     this.structuresLayer = structuresLayer;
-    this.hudText = hudText;
     this.onChanged = onChanged;
 
     this.ghostCell = scene.add
@@ -107,8 +104,6 @@ export class PlacementManager {
       throw new Error('Keyboard plugin required for PlacementManager');
     }
 
-    this.placeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
-    this.cycleKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
     this.removeKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.R);
     this.digitKeys = [
       keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ONE),
@@ -118,58 +113,52 @@ export class PlacementManager {
       keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.FIVE),
     ];
 
-    scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.mode === 'off' || !pointer.leftButtonDown()) {
-        return;
-      }
-      // Ignore clicks on the palette strip (handled by slot handlers).
-      if (pointer.y >= this.scene.scale.height - 88) {
-        return;
-      }
-      this.actAt(this.cursorGrid.x, this.cursorGrid.y);
-    });
+    this.boundPointerDown = (pointer: Phaser.Input.Pointer) => this.onPointerDown(pointer);
+    scene.input.on('pointerdown', this.boundPointerDown);
 
     for (const structure of gameState.structures) {
       this.spawnStructure(structure, false);
     }
-
-    this.refreshHud();
-    this.refreshPalette();
   }
 
   get isBuildMode(): boolean {
-    return this.mode !== 'off';
+    return this.active;
   }
 
-  toggleMode(): void {
-    if (this.mode === 'off') {
-      this.setMode('place');
-    } else {
-      this.setMode('off');
+  get selectedLabel(): string {
+    return BUILD_LABELS[this.selected];
+  }
+
+  get selectedCost(): string {
+    return formatCost(BUILD_COSTS[this.selected]);
+  }
+
+  get isRemoveSubMode(): boolean {
+    return this.subMode === 'remove';
+  }
+
+  setActive(active: boolean): void {
+    this.active = active;
+    if (!active) {
+      this.subMode = 'place';
     }
-  }
-
-  private setMode(next: BuildMode): void {
-    this.mode = next;
-    const active = next !== 'off';
-    this.ghost.setVisible(active);
+    this.ghost.setVisible(active && this.subMode === 'place');
     this.ghostCell.setVisible(active);
     this.statusText.setVisible(active);
     this.paletteRoot.setVisible(active);
     this.clearFeedback();
-    this.refreshHud();
     this.refreshPalette();
   }
 
   update(pointerWorldX: number, pointerWorldY: number): void {
-    this.handleHotkeys();
-
-    if (this.mode === 'off') {
+    if (!this.active) {
       this.ghost.setVisible(false);
       this.ghostCell.setVisible(false);
       this.statusText.setVisible(false);
       return;
     }
+
+    this.handleHotkeys();
 
     const gridX = Math.floor(pointerWorldX / GRID_SIZE);
     const gridY = Math.floor(pointerWorldY / GRID_SIZE);
@@ -179,44 +168,55 @@ export class PlacementManager {
     const worldY = gridY * GRID_SIZE + GRID_SIZE / 2;
 
     this.ghostCell.setPosition(worldX, worldY).setVisible(true);
-    this.ghost.setPosition(worldX, worldY).setVisible(this.mode === 'place');
+    this.ghost.setPosition(worldX, worldY).setVisible(this.subMode === 'place');
     this.statusText.setPosition(worldX, worldY - 22).setVisible(true);
 
-    if (this.mode === 'place') {
+    if (this.subMode === 'place') {
       this.updatePlaceGhost(gridX, gridY);
     } else {
       this.updateRemoveGhost(gridX, gridY);
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.placeKey)) {
-      this.actAt(gridX, gridY);
-    }
-
-    this.refreshHud();
     this.refreshPalette();
   }
 
-  private handleHotkeys(): void {
-    if (Phaser.Input.Keyboard.JustDown(this.cycleKey)) {
-      if (this.mode === 'off') {
-        this.setMode('place');
-      } else if (this.mode === 'place') {
-        this.cycleSelected(1);
-      }
+  /** RMB place (or remove if in remove sub-mode). */
+  contextAction(): void {
+    if (!this.active) {
+      return;
+    }
+    this.actAt(this.cursorGrid.x, this.cursorGrid.y);
+  }
+
+  private onPointerDown(pointer: Phaser.Input.Pointer): void {
+    if (!this.active) {
+      return;
+    }
+    if (pointer.y >= this.scene.scale.height - 88) {
+      return;
     }
 
-    if (this.mode !== 'off' && Phaser.Input.Keyboard.JustDown(this.removeKey)) {
-      this.setMode(this.mode === 'remove' ? 'place' : 'remove');
+    // RMB place is handled by the scene via contextAction() to avoid double-fires.
+    if (pointer.rightButtonDown()) {
+      return;
+    }
+
+    if (pointer.leftButtonDown()) {
+      // Left-click removes under cursor when building tool is active
+      this.tryRemove(this.cursorGrid.x, this.cursorGrid.y);
+    }
+  }
+
+  private handleHotkeys(): void {
+    if (Phaser.Input.Keyboard.JustDown(this.removeKey)) {
+      this.subMode = this.subMode === 'remove' ? 'place' : 'remove';
+      this.clearFeedback();
     }
 
     for (let i = 0; i < this.digitKeys.length; i += 1) {
       if (Phaser.Input.Keyboard.JustDown(this.digitKeys[i])) {
-        if (this.mode === 'off') {
-          this.setMode('place');
-        } else if (this.mode === 'remove') {
-          this.setMode('place');
-        }
         this.selectKind(BUILD_ORDER[i]);
+        this.subMode = 'place';
       }
     }
   }
@@ -231,12 +231,12 @@ export class PlacementManager {
     if (canPlace) {
       this.ghost.setTint(0xffffff).setAlpha(0.6);
       this.ghostCell.setTint(0x4ade80);
-      this.statusText.setText(`${BUILD_LABELS[this.selected]} — click / E to place`);
+      this.statusText.setText(`${BUILD_LABELS[this.selected]} — RMB place · LMB/R remove`);
       this.statusText.setStyle({ color: '#ecfccb', backgroundColor: '#14532dcc' });
     } else if (occupied) {
       this.ghost.setTint(0xf97316).setAlpha(0.35);
       this.ghostCell.setTint(0xf97316);
-      this.statusText.setText('Occupied — press R to remove');
+      this.statusText.setText('Occupied — LMB or R to remove');
       this.statusText.setStyle({ color: '#ffedd5', backgroundColor: '#9a3412cc' });
     } else {
       this.ghost.setTint(0xef4444).setAlpha(0.45);
@@ -257,12 +257,12 @@ export class PlacementManager {
       this.ghostCell.setTint(0xf87171);
       const refund = formatCost(BUILD_COSTS[cell.structure.kind]);
       this.statusText.setText(
-        `Remove ${BUILD_LABELS[cell.structure.kind]} — refund ${refund || 'nothing'}`,
+        `Remove ${BUILD_LABELS[cell.structure.kind]} — refund ${refund || 'nothing'} (RMB/LMB)`,
       );
       this.statusText.setStyle({ color: '#fee2e2', backgroundColor: '#7f1d1dcc' });
     } else {
       this.ghostCell.setTint(0x94a3b8);
-      this.statusText.setText('Remove mode — click a structure (R exits)');
+      this.statusText.setText('Remove sub-mode — aim at a structure (R back to place)');
       this.statusText.setStyle({ color: '#e2e8f0', backgroundColor: '#334155cc' });
     }
 
@@ -272,33 +272,24 @@ export class PlacementManager {
   }
 
   private actAt(gridX: number, gridY: number): void {
-    if (this.mode === 'place') {
+    if (this.subMode === 'place') {
       this.tryPlace(gridX, gridY);
-    } else if (this.mode === 'remove') {
+    } else {
       this.tryRemove(gridX, gridY);
     }
   }
 
-  private cycleSelected(dir: number): void {
-    const index = BUILD_ORDER.indexOf(this.selected);
-    const next = (index + dir + BUILD_ORDER.length) % BUILD_ORDER.length;
-    this.selectKind(BUILD_ORDER[next]);
-  }
-
   private selectKind(kind: StructureKind): void {
     this.selected = kind;
-    if (this.mode === 'remove') {
-      this.setMode('place');
-    }
+    this.subMode = 'place';
     this.clearFeedback();
-    this.refreshHud();
     this.refreshPalette();
   }
 
   private tryPlace(gridX: number, gridY: number): void {
     const key = cellKey(gridX, gridY);
     if (this.occupied.has(key)) {
-      this.flashFeedback('Tile occupied', '#fecaca');
+      this.flashFeedback('Tile occupied — LMB to remove', '#fecaca');
       return;
     }
 
@@ -322,7 +313,6 @@ export class PlacementManager {
 
     this.spawnStructure(structure, true);
     this.flashFeedback(`Placed ${BUILD_LABELS[this.selected]} (−${formatCost(costs)})`, '#bbf7d0');
-    this.refreshHud();
     this.refreshPalette();
     this.onChanged?.();
   }
@@ -350,7 +340,6 @@ export class PlacementManager {
       `Removed ${BUILD_LABELS[removed.kind]} (+${formatCost(refund) || '0'})`,
       '#bbf7d0',
     );
-    this.refreshHud();
     this.refreshPalette();
     this.onChanged?.();
   }
@@ -389,14 +378,14 @@ export class PlacementManager {
       .setStrokeStyle(1, 0x4ade80, 0.45);
     this.paletteRoot.add(bar);
 
-    const title = this.scene.add
-      .text(camW / 2, y + 8, 'STRUCTURE PALETTE — 1-5 select · Q cycle · R remove · B exit', {
+    this.paletteTitle = this.scene.add
+      .text(camW / 2, y + 8, 'PALETTE — 1-5 select · RMB place · LMB/R remove · Q change tool', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '11px',
         color: '#bbf7d0',
       })
       .setOrigin(0.5, 0);
-    this.paletteRoot.add(title);
+    this.paletteRoot.add(this.paletteTitle);
 
     BUILD_ORDER.forEach((kind, i) => {
       const x = startX + i * (slotW + gap) + slotW / 2;
@@ -428,7 +417,6 @@ export class PlacementManager {
 
       bg.on('pointerdown', () => {
         this.selectKind(kind);
-        this.setMode('place');
       });
 
       this.paletteSlots.push({ kind, container, bg, icon, label, costText });
@@ -437,7 +425,7 @@ export class PlacementManager {
 
   private refreshPalette(): void {
     for (const slot of this.paletteSlots) {
-      const selected = this.mode === 'place' && slot.kind === this.selected;
+      const selected = this.subMode === 'place' && slot.kind === this.selected;
       const afford = gameState.canAfford(BUILD_COSTS[slot.kind]);
       slot.bg.setFillStyle(selected ? 0x166534 : 0x14532d, 0.95);
       slot.bg.setStrokeStyle(2, selected ? 0xfde68a : afford ? 0x86efac : 0xf87171, selected ? 0.95 : 0.5);
@@ -455,26 +443,6 @@ export class PlacementManager {
   private clearFeedback(): void {
     this.feedbackUntil = 0;
     this.feedbackMessage = '';
-  }
-
-  refreshHud(): void {
-    const inv = gameState.inventory;
-    const cost = BUILD_COSTS[this.selected];
-    const modeLine =
-      this.mode === 'off'
-        ? 'B / Q — enter build mode · Walk north gate → cave'
-        : this.mode === 'place'
-          ? `PLACE: ${BUILD_LABELS[this.selected]} (${formatCost(cost)}) · click/E place · R remove · B exit`
-          : 'REMOVE: click/E structure to refund materials · R back to place · B exit';
-
-    this.hudText.setText(
-      [
-        'TOWN — absolute safe zone (no hostiles)',
-        `HP ${gameState.player.hp}/${gameState.player.maxHp}`,
-        `Inv: wood ${inv.wood}  stone ${inv.stone}  ore ${inv.ore}  scrap ${inv.scrap}  crystal ${inv.crystal ?? 0}`,
-        modeLine,
-      ].join('\n'),
-    );
   }
 }
 

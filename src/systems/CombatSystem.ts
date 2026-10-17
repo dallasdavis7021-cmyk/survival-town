@@ -52,7 +52,6 @@ export class CombatSystem {
   private scene: Phaser.Scene;
   private player: Phaser.Physics.Arcade.Sprite;
   private hostiles: Phaser.Physics.Arcade.Group;
-  private attackKey: Phaser.Input.Keyboard.Key;
   private phase: AttackPhase = 'idle';
   private phaseEndsAt = 0;
   private swingDir = new Phaser.Math.Vector2(0, 1);
@@ -79,13 +78,19 @@ export class CombatSystem {
     this.hostiles = hostiles;
     this.onHostileKilled = options?.onHostileKilled;
     this.onPlayerHurt = options?.onPlayerHurt;
+  }
 
-    const keyboard = scene.input.keyboard;
-    if (!keyboard) {
-      throw new Error('Keyboard plugin required for CombatSystem');
+  get facingVector(): Phaser.Math.Vector2 {
+    return this.facing.clone();
+  }
+
+  /** Start a directional melee swing (call from RMB in Weapon tool mode). */
+  tryStartAttack(time = this.scene.time.now): boolean {
+    if (this.phase !== 'idle' || time < this.playerStunUntil) {
+      return false;
     }
-
-    this.attackKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.beginSwing(time);
+    return true;
   }
 
   get attackPhase(): AttackPhase {
@@ -125,10 +130,6 @@ export class CombatSystem {
   update(time: number, delta: number): void {
     this.updateFacing();
     this.updateAttackPhase(time);
-
-    if (this.phase === 'idle' && Phaser.Input.Keyboard.JustDown(this.attackKey)) {
-      this.beginSwing(time);
-    }
 
     if (this.phase === 'active') {
       this.resolveActiveHits();

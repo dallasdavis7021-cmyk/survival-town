@@ -28,4 +28,7 @@ window.addEventListener('beforeunload', () => {
   gameState.saveNow();
 });
 
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+game.events.once(Phaser.Core.Events.READY, () => {
+  game.canvas?.addEventListener('contextmenu', (e) => e.preventDefault());
+});

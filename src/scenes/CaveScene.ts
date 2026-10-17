@@ -1,12 +1,21 @@
 import Phaser from 'phaser';
 import { gameState, type InventoryItemId } from '../state/GameState';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
+import { LootDrops } from '../systems/LootDrops';
 import { GRID_SIZE } from '../systems/PlacementManager';
+import {
+  cycleTool,
+  getActiveTool,
+  TOOL_LABELS,
+  toolHelpLine,
+  type ToolId,
+} from '../systems/PlayerTools';
 import { ensureShapeTextures } from '../utils/textures';
 
 /** North = deep, south = exit / shallow. */
 const MAP_W = 42 * GRID_SIZE;
 const MAP_H = 48 * GRID_SIZE;
+const MINE_RANGE = 56;
 
 type CaveTier = 1 | 2 | 3;
 
@@ -26,17 +35,22 @@ export class CaveScene extends Phaser.Scene {
     S: Phaser.Input.Keyboard.Key;
     D: Phaser.Input.Keyboard.Key;
   };
-  private mineKey!: Phaser.Input.Keyboard.Key;
+  private toolKey!: Phaser.Input.Keyboard.Key;
+  private pickupKey!: Phaser.Input.Keyboard.Key;
   private combat!: CombatSystem;
+  private loot!: LootDrops;
   private hostiles!: Phaser.Physics.Arcade.Group;
   private oreNodes!: Phaser.Physics.Arcade.StaticGroup;
   private hud!: Phaser.GameObjects.Text;
+  private help!: Phaser.GameObjects.Text;
   private fogRt!: Phaser.GameObjects.RenderTexture;
   private lightMaskKey = 'light-mask-mid';
   private lightRadius = 140;
   private currentTier: CaveTier = 1;
+  private tool: ToolId = getActiveTool();
   private transitioning = false;
   private runLoot: Partial<Record<InventoryItemId, number>> = {};
+  private facing = new Phaser.Math.Vector2(0, -1);
 
   constructor() {
     super('CaveScene');
@@ -48,6 +62,7 @@ export class CaveScene extends Phaser.Scene {
     gameState.setLastScene('CaveScene');
     this.transitioning = false;
     this.runLoot = {};
+    this.tool = getActiveTool();
 
     this.cameras.main.setBackgroundColor('#020617');
     this.physics.world.setBounds(0, 0, MAP_W, MAP_H);
@@ -56,7 +71,6 @@ export class CaveScene extends Phaser.Scene {
     this.drawCaveFloor();
     this.drawExitPath();
 
-    // Spawn near southern exit (shallow tier)
     this.player = this.physics.add.sprite(MAP_W / 2, MAP_H - 72, 'player');
     this.player.setCollideWorldBounds(true);
     this.player.setDepth(10);
@@ -65,6 +79,11 @@ export class CaveScene extends Phaser.Scene {
 
     this.hostiles = this.physics.add.group();
     this.oreNodes = this.physics.add.staticGroup();
+    this.loot = new LootDrops(this, {
+      onCollected: (id, amount) => {
+        this.runLoot[id] = (this.runLoot[id] ?? 0) + amount;
+      },
+    });
 
     this.combat = new CombatSystem(this, this.player, this.hostiles, {
       onHostileKilled: (hostile, x, y) => this.onHostileKilled(hostile, x, y),
@@ -106,6 +125,17 @@ export class CaveScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(100);
 
+    this.help = this.add
+      .text(12, this.scale.height - 52, '', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '12px',
+        color: '#cbd5e1',
+        backgroundColor: '#0f172acc',
+        padding: { x: 8, y: 5 },
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
+
     const keyboard = this.input.keyboard;
     if (!keyboard) {
       throw new Error('Keyboard required');
@@ -113,7 +143,15 @@ export class CaveScene extends Phaser.Scene {
 
     this.cursors = keyboard.createCursorKeys();
     this.wasd = keyboard.addKeys('W,A,S,D') as typeof this.wasd;
-    this.mineKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+    this.toolKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+    this.pickupKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.rightButtonDown() || this.transitioning) {
+        return;
+      }
+      this.onRightClick(pointer);
+    });
 
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
       this.fogRt.setSize(gameSize.width, gameSize.height);
@@ -132,23 +170,46 @@ export class CaveScene extends Phaser.Scene {
       return;
     }
 
+    if (Phaser.Input.Keyboard.JustDown(this.toolKey)) {
+      this.tool = cycleTool();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.pickupKey)) {
+      this.loot.collectNear(this.player.x, this.player.y);
+    }
+
     this.updateTierFromPosition();
     this.movePlayer();
     this.combat.update(time, delta);
-    this.tryMine();
     this.drawFog();
     this.refreshHud();
+  }
+
+  private onRightClick(pointer: Phaser.Input.Pointer): void {
+    if (this.tool === 'weapon') {
+      this.combat.tryStartAttack(this.time.now);
+      return;
+    }
+
+    if (this.tool === 'mining') {
+      const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      this.tryMineAt(world.x, world.y);
+      return;
+    }
+
+    // Building tool in cave — structures only in town
+    this.floatText(this.player.x, this.player.y - 24, 'Build in town only', '#fde68a');
   }
 
   private tierAtY(y: number): CaveTier {
     const t = y / MAP_H;
     if (t < 0.34) {
-      return 3; // deep north
+      return 3;
     }
     if (t < 0.62) {
-      return 2; // mid
+      return 2;
     }
-    return 1; // shallow south near exit
+    return 1;
   }
 
   private updateTierFromPosition(): void {
@@ -191,7 +252,6 @@ export class CaveScene extends Phaser.Scene {
   }
 
   private spawnTierContent(): void {
-    // Shallow (tier 1) — near exit, weaker foes, basic ore
     const shallowHostiles = [
       { x: 10 * GRID_SIZE, y: 38 * GRID_SIZE },
       { x: 30 * GRID_SIZE, y: 40 * GRID_SIZE },
@@ -210,7 +270,6 @@ export class CaveScene extends Phaser.Scene {
     this.spawnOre(28 * GRID_SIZE, 37 * GRID_SIZE, 1, 'ore-node');
     this.spawnOre(16 * GRID_SIZE, 42 * GRID_SIZE, 1, 'ore-node');
 
-    // Mid (tier 2)
     const midHostiles = [
       { x: 8 * GRID_SIZE, y: 24 * GRID_SIZE },
       { x: 32 * GRID_SIZE, y: 26 * GRID_SIZE },
@@ -232,7 +291,6 @@ export class CaveScene extends Phaser.Scene {
     this.spawnOre(20 * GRID_SIZE, 26 * GRID_SIZE, 2, 'ore-node');
     this.spawnOre(6 * GRID_SIZE, 20 * GRID_SIZE, 2, 'ore-rich');
 
-    // Deep (tier 3) — elites + rare ore, darkest
     const deepHostiles = [
       { x: 10 * GRID_SIZE, y: 8 * GRID_SIZE },
       { x: 30 * GRID_SIZE, y: 10 * GRID_SIZE },
@@ -257,7 +315,6 @@ export class CaveScene extends Phaser.Scene {
     this.spawnOre(22 * GRID_SIZE, 12 * GRID_SIZE, 3, 'ore-rich');
     this.spawnOre(16 * GRID_SIZE, 4 * GRID_SIZE, 3, 'ore-rare');
 
-    // Tier banners (world space)
     this.addTierBanner(MAP_W / 2, MAP_H * 0.78, 'TIER 1 — SHALLOW', '#86efac');
     this.addTierBanner(MAP_W / 2, MAP_H * 0.48, 'TIER 2 — DEPTHS', '#fde68a');
     this.addTierBanner(MAP_W / 2, MAP_H * 0.16, 'TIER 3 — ABYSS', '#fca5a5');
@@ -299,17 +356,9 @@ export class CaveScene extends Phaser.Scene {
       drops.push({ id: 'crystal', n: 1 });
     }
 
-    for (const d of drops) {
-      this.grantLoot(d.id, d.n);
-    }
-    const label = drops.map((d) => `+${d.n} ${d.id}`).join(' ');
-    this.floatText(x, y - 12, label, tier >= 3 ? '#e9d5ff' : '#fef08a');
+    this.loot.dropMany(x, y, drops);
+    this.floatText(x, y - 12, 'loot dropped — E pick up', tier >= 3 ? '#e9d5ff' : '#fef08a');
     this.refreshHud();
-  }
-
-  private grantLoot(id: InventoryItemId, amount: number): void {
-    gameState.addItem(id, amount);
-    this.runLoot[id] = (this.runLoot[id] ?? 0) + amount;
   }
 
   private movePlayer(): void {
@@ -344,23 +393,61 @@ export class CaveScene extends Phaser.Scene {
       vy *= inv;
     }
 
+    if (vx !== 0 || vy !== 0) {
+      this.facing.set(vx, vy).normalize();
+    }
+
     this.player.setVelocity(vx * speed, vy * speed);
   }
 
-  private tryMine(): void {
-    if (!Phaser.Input.Keyboard.JustDown(this.mineKey) || this.combat.isAttackLocked) {
+  /** Mine ore under cursor if in range, else nearest in facing / near player. */
+  private tryMineAt(cursorX: number, cursorY: number): void {
+    if (this.combat.isAttackLocked) {
       return;
     }
 
     const nodes = this.oreNodes.getChildren() as Phaser.Physics.Arcade.Sprite[];
-    const node = nodes.find(
-      (n) => n.active && Phaser.Math.Distance.Between(this.player.x, this.player.y, n.x, n.y) < 42,
+    const inPlayerRange = nodes.filter(
+      (n) =>
+        n.active &&
+        Phaser.Math.Distance.Between(this.player.x, this.player.y, n.x, n.y) <= MINE_RANGE,
     );
 
-    if (!node) {
+    if (inPlayerRange.length === 0) {
+      this.floatText(this.player.x, this.player.y - 20, 'No ore in range', '#94a3b8');
       return;
     }
 
+    let target =
+      inPlayerRange.find(
+        (n) => Phaser.Math.Distance.Between(cursorX, cursorY, n.x, n.y) < 28,
+      ) ?? null;
+
+    if (!target) {
+      // Prefer node in facing direction
+      const face = this.combat.facingVector.lengthSq() > 0 ? this.combat.facingVector : this.facing;
+      let bestScore = -Infinity;
+      for (const n of inPlayerRange) {
+        const dx = n.x - this.player.x;
+        const dy = n.y - this.player.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const dot = (dx / dist) * face.x + (dy / dist) * face.y;
+        const score = dot * 2 - dist / MINE_RANGE;
+        if (score > bestScore) {
+          bestScore = score;
+          target = n;
+        }
+      }
+    }
+
+    if (!target) {
+      return;
+    }
+
+    this.strikeOre(target);
+  }
+
+  private strikeOre(node: Phaser.Physics.Arcade.Sprite): void {
     const data = node.getData('ore') as OreNodeData;
     data.hp -= 1;
     node.setData('ore', data);
@@ -373,10 +460,8 @@ export class CaveScene extends Phaser.Scene {
 
     this.floatText(node.x, node.y - 10, `${data.maxHp - data.hp}/${data.maxHp}`, '#cbd5e1');
 
-    // Chip drop while mining
     if (Math.random() < 0.35) {
-      this.grantLoot('stone', 1);
-      this.floatText(node.x + 10, node.y - 18, '+stone', '#94a3b8');
+      this.loot.drop(node.x, node.y, 'stone', 1);
     }
 
     if (data.hp > 0) {
@@ -407,14 +492,14 @@ export class CaveScene extends Phaser.Scene {
       }
     }
 
-    for (const d of drops) {
-      this.grantLoot(d.id, d.n);
-    }
-
-    const label = drops.map((d) => `+${d.n} ${d.id}`).join(' ');
-    this.floatText(node.x, node.y - 16, label, data.kind === 'ore-rare' ? '#e9d5ff' : '#93c5fd');
+    this.loot.dropMany(node.x, node.y, drops);
+    this.floatText(
+      node.x,
+      node.y - 16,
+      'ore broke — E pick up',
+      data.kind === 'ore-rare' ? '#e9d5ff' : '#93c5fd',
+    );
     node.destroy();
-    gameState.saveNow();
     this.refreshHud();
   }
 
@@ -427,14 +512,11 @@ export class CaveScene extends Phaser.Scene {
       this.fogRt.setSize(cam.width, cam.height);
     }
 
-    // Deeper = darker base overlay
     const baseAlpha = this.currentTier === 1 ? 0.78 : this.currentTier === 2 ? 0.9 : 0.97;
     this.fogRt.clear();
     this.fogRt.fill(0x020617, baseAlpha);
-    // Soft edge: erase primary then a smaller brighter core feel via second erase
     this.fogRt.erase(this.lightMaskKey, localX - this.lightRadius, localY - this.lightRadius);
     if (this.currentTier >= 2) {
-      // Extra darkness ring — fill corners again slightly by not double-erasing
       this.fogRt.fill(0x000000, this.currentTier === 3 ? 0.12 : 0.06);
       this.fogRt.erase(this.lightMaskKey, localX - this.lightRadius, localY - this.lightRadius);
     }
@@ -454,11 +536,14 @@ export class CaveScene extends Phaser.Scene {
     this.hud.setText(
       [
         `CAVE TIER ${this.currentTier} — ${tierName}  ·  light ${this.lightRadius}px`,
-        `HP ${gameState.player.hp}/${gameState.player.maxHp}  ·  melee ${swing}`,
+        `HP ${gameState.player.hp}/${gameState.player.maxHp}  ·  Active: ${TOOL_LABELS[this.tool]}${this.tool === 'weapon' ? ` (${swing})` : ''}`,
         `Inv: wood ${inv.wood} stone ${inv.stone} ore ${inv.ore} scrap ${inv.scrap} crystal ${inv.crystal}`,
-        `This run: ${runBits || '—'}  ·  SPACE swing · E mine · south exit → town`,
+        `Picked up this run: ${runBits || '—'}  ·  south exit → town`,
       ].join('\n'),
     );
+
+    this.help.setText(`${toolHelpLine(this.tool)}  ·  WASD move`);
+    this.help.setPosition(12, this.scale.height - 52);
   }
 
   private floatText(x: number, y: number, label: string, color: string): void {
@@ -493,7 +578,7 @@ export class CaveScene extends Phaser.Scene {
     this.transitioning = true;
     gameState.heal(Math.floor(gameState.player.maxHp * 0.5));
     gameState.saveNow();
-    this.floatText(this.player.x, this.player.y, 'Knocked out — returning with loot…', '#fca5a5');
+    this.floatText(this.player.x, this.player.y, 'Knocked out — returning…', '#fca5a5');
     this.time.delayedCall(700, () => this.scene.start('TownScene'));
   }
 
@@ -514,7 +599,6 @@ export class CaveScene extends Phaser.Scene {
   }
 
   private drawExitPath(): void {
-    // Clear north–south corridor toward town exit so the return route stays readable
     const cx = MAP_W / 2;
     for (let y = MAP_H - GRID_SIZE; y > MAP_H * 0.55; y -= GRID_SIZE) {
       this.add.image(cx, y + GRID_SIZE / 2, 'tile-cave-path').setDepth(1).setAlpha(0.9);
