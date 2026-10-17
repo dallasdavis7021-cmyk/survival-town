@@ -15,8 +15,10 @@ Top-down browser action RPG / town builder. Explore caves for loot and ore, retu
 | `GameState` | Player stats, inventory, placed structures, auto-save |
 | `TownScene` | Safe haven — building only, no hostile spawns |
 | `CaveScene` | Hostiles, mining, melee, radial fog/light |
-| `PlacementManager` | 32×32 ghost preview, palette, place/remove + material refund |
-| `CombatSystem` | Aggro, melee, knockback |
+| `PlayerTools` | Shared Mining → Weapon → Building tool cycle |
+| `LootDrops` | Ground pickups collected with E |
+| `PlacementManager` | 32×32 ghost preview, palette, place/remove + refund |
+| `CombatSystem` | Aggro, melee wind-up/hit/recovery, knockback |
 
 ## Run locally
 
@@ -39,28 +41,23 @@ npm run build
 npm run preview
 ```
 
-## Controls
+## Controls cheat-sheet
 
-**Town**
+| Input | Action |
+| --- | --- |
+| **WASD** / arrows | Move (8-dir) |
+| **Q** | Cycle tool: Mining → Weapon → Building → … |
+| **E** | Pick up nearby ground loot |
+| **RMB** | Tool action — Weapon: attack · Mining: mine under cursor/facing · Building: place |
+| **LMB** / **R** | Building tool — remove structure (refund materials) |
+| **1–5** | Building tool — select House / Bench / Wall / Light / Decor |
 
-- `WASD` / arrows — move
-- `B` or `Q` — enter / exit build mode
-- `1`–`5` or click the palette — select House / Bench / Wall / Light / Decor
-- `Q` (in place mode) — cycle structure
-- `E` or left-click — place (blocked if tile occupied or materials insufficient)
-- `R` — toggle remove mode; `E` / click refunds materials and clears the tile
-- Ghost preview snaps to the 32×32 grid (green = ok, red = can't afford, orange = occupied)
-- Walk into the north **CAVE ENTRANCE** to enter the cave
+Town is an absolute safe zone (no hostiles). Building placements only apply in town; cave RMB with Building tool reminds you to return. Loot from combat/mining drops on the ground — use **E** to collect into inventory (persisted via `GameState`).
 
-**Cave**
+### Scene tips
 
-- `WASD` / arrows — move (slowed during melee wind-up / recovery)
-- `SPACE` — directional melee (wind-up → hit window → recovery; faces last move dir)
-- `E` — mine nearby ore (chip stone while hitting; richer nodes deeper)
-- Three depth tiers northward: Shallow → Depths → Abyss (harder foes, better ore / crystal, tighter light)
-- Follow the marked south path to **RETURN TO TOWN** — inventory & stats auto-save via `GameState`
-
-Town is an absolute safe zone: hostiles never spawn or pursue there.
+- **Town:** north **CAVE ENTRANCE** gate enters the cave
+- **Cave:** three depth tiers northward; follow marked south path to **RETURN TO TOWN**
 
 ## v0 notes
 

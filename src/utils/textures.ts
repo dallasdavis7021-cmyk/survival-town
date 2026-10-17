@@ -55,6 +55,7 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
   rect('cave-exit', 40, 20, 0x22c55e, 0x14532d);
   rect('town-gate', 40, 20, 0x38bdf8, 0x0c4a6e);
   circle('hit-spark', 10, 0xfef08a);
+  circle('loot-orb', 12, 0xffffff, 0x1e293b);
   // Directional melee telegraph wedge
   if (!scene.textures.exists('melee-arc')) {
     g.clear();

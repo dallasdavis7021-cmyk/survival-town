@@ -1,6 +1,14 @@
 import Phaser from 'phaser';
 import { gameState } from '../state/GameState';
+import { LootDrops } from '../systems/LootDrops';
 import { GRID_SIZE, PlacementManager } from '../systems/PlacementManager';
+import {
+  cycleTool,
+  getActiveTool,
+  TOOL_LABELS,
+  toolHelpLine,
+  type ToolId,
+} from '../systems/PlayerTools';
 import { ensureShapeTextures } from '../utils/textures';
 
 const MAP_W = 32 * GRID_SIZE;
@@ -15,10 +23,15 @@ export class TownScene extends Phaser.Scene {
     S: Phaser.Input.Keyboard.Key;
     D: Phaser.Input.Keyboard.Key;
   };
-  private buildKey!: Phaser.Input.Keyboard.Key;
+  private toolKey!: Phaser.Input.Keyboard.Key;
+  private pickupKey!: Phaser.Input.Keyboard.Key;
   private placement!: PlacementManager;
+  private loot!: LootDrops;
   private hud!: Phaser.GameObjects.Text;
+  private help!: Phaser.GameObjects.Text;
+  private tool: ToolId = getActiveTool();
   private transitioning = false;
+  private facing = new Phaser.Math.Vector2(0, -1);
 
   constructor() {
     super('TownScene');
@@ -29,6 +42,7 @@ export class TownScene extends Phaser.Scene {
     gameState.setLastScene('TownScene');
     gameState.heal(gameState.player.maxHp);
     this.transitioning = false;
+    this.tool = getActiveTool();
 
     this.cameras.main.setBackgroundColor('#1a2e1a');
     this.physics.world.setBounds(0, 0, MAP_W, MAP_H);
@@ -37,6 +51,13 @@ export class TownScene extends Phaser.Scene {
     this.drawGround();
 
     const structures = this.add.group();
+    this.placement = new PlacementManager(this, structures);
+    this.loot = new LootDrops(this);
+
+    // A couple of starter ground scraps so E pickup is demonstrable in town
+    this.loot.drop(MAP_W / 2 - 48, MAP_H / 2 + 80, 'wood', 2);
+    this.loot.drop(MAP_W / 2 + 56, MAP_H / 2 + 64, 'stone', 1);
+
     this.hud = this.add
       .text(12, 10, '', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -48,9 +69,16 @@ export class TownScene extends Phaser.Scene {
       .setScrollFactor(0)
       .setDepth(100);
 
-    this.placement = new PlacementManager(this, structures, this.hud, () => {
-      this.placement.refreshHud();
-    });
+    this.help = this.add
+      .text(12, this.scale.height - 52, '', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '12px',
+        color: '#d9f99d',
+        backgroundColor: '#052e16cc',
+        padding: { x: 8, y: 5 },
+      })
+      .setScrollFactor(0)
+      .setDepth(101);
 
     const spawnX = MAP_W / 2;
     const spawnY = MAP_H / 2 + 40;
@@ -80,9 +108,18 @@ export class TownScene extends Phaser.Scene {
 
     this.cursors = keyboard.createCursorKeys();
     this.wasd = keyboard.addKeys('W,A,S,D') as typeof this.wasd;
-    this.buildKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.B);
+    this.toolKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.Q);
+    this.pickupKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
-    this.placement.refreshHud();
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (!pointer.rightButtonDown() || this.transitioning) {
+        return;
+      }
+      this.onRightClick();
+    });
+
+    this.applyTool();
+    this.refreshHud();
   }
 
   update(): void {
@@ -90,23 +127,47 @@ export class TownScene extends Phaser.Scene {
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.buildKey)) {
-      this.placement.toggleMode();
+    if (Phaser.Input.Keyboard.JustDown(this.toolKey)) {
+      this.tool = cycleTool();
+      this.applyTool();
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.pickupKey)) {
+      this.loot.collectNear(this.player.x, this.player.y);
+      this.refreshHud();
     }
 
     const pointer = this.input.activePointer;
     const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
     this.placement.update(worldPoint.x, worldPoint.y);
 
-    if (this.placement.isBuildMode) {
-      this.player.setVelocity(0, 0);
+    this.movePlayer();
+    this.refreshHud();
+  }
+
+  private applyTool(): void {
+    this.placement.setActive(this.tool === 'building');
+    this.refreshHud();
+  }
+
+  private onRightClick(): void {
+    if (this.tool === 'building') {
+      this.placement.contextAction();
+      this.refreshHud();
       return;
     }
 
-    this.movePlayer();
+    if (this.tool === 'weapon') {
+      this.floatHint('No hostiles in town (safe zone)');
+      return;
+    }
+
+    // Mining in town — nothing to mine
+    this.floatHint('Nothing to mine here — enter the cave');
   }
 
   private movePlayer(): void {
+    // Allow walking while building so players can reposition; ghost still follows cursor
     const speed = gameState.player.speed;
     let vx = 0;
     let vy = 0;
@@ -130,7 +191,53 @@ export class TownScene extends Phaser.Scene {
       vy *= inv;
     }
 
+    if (vx !== 0 || vy !== 0) {
+      this.facing.set(vx, vy).normalize();
+    }
+
     this.player.setVelocity(vx * speed, vy * speed);
+  }
+
+  private refreshHud(): void {
+    const inv = gameState.inventory;
+    const buildExtra =
+      this.tool === 'building'
+        ? ` · ${this.placement.selectedLabel} (${this.placement.selectedCost}) · LMB/R remove`
+        : '';
+
+    this.hud.setText(
+      [
+        'TOWN — absolute safe zone (no hostiles)',
+        `HP ${gameState.player.hp}/${gameState.player.maxHp}`,
+        `Inv: wood ${inv.wood}  stone ${inv.stone}  ore ${inv.ore}  scrap ${inv.scrap}  crystal ${inv.crystal ?? 0}`,
+        `Active: ${TOOL_LABELS[this.tool]}${buildExtra}`,
+      ].join('\n'),
+    );
+
+    this.help.setText(
+      `${toolHelpLine(this.tool)}  ·  WASD move  ·  north gate → cave`,
+    );
+    this.help.setPosition(12, this.scale.height - (this.tool === 'building' ? 140 : 52));
+  }
+
+  private floatHint(msg: string): void {
+    const t = this.add
+      .text(this.player.x, this.player.y - 28, msg, {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '12px',
+        color: '#fef9c3',
+        backgroundColor: '#14532dcc',
+        padding: { x: 6, y: 3 },
+      })
+      .setOrigin(0.5)
+      .setDepth(50);
+    this.tweens.add({
+      targets: t,
+      alpha: 0,
+      y: t.y - 16,
+      duration: 900,
+      onComplete: () => t.destroy(),
+    });
   }
 
   private enterCave(): void {
@@ -155,7 +262,6 @@ export class TownScene extends Phaser.Scene {
       }
     }
 
-    // Soft town glow atmosphere
     const glow = this.add.graphics().setDepth(1);
     glow.fillStyle(0x86efac, 0.08);
     glow.fillCircle(MAP_W / 2, MAP_H / 2, 220);
