@@ -15,7 +15,7 @@ Top-down browser action RPG / town builder. Explore caves for loot and ore, retu
 | `GameState` | Player stats, inventory, placed structures, auto-save |
 | `TownScene` | Safe haven — building only, no hostile spawns |
 | `CaveScene` | Hostiles, mining, melee, radial fog/light |
-| `PlacementManager` | 32×32 grid snap placement |
+| `PlacementManager` | 32×32 ghost preview, palette, place/remove + material refund |
 | `CombatSystem` | Aggro, melee, knockback |
 
 ## Run locally
@@ -44,9 +44,12 @@ npm run preview
 **Town**
 
 - `WASD` / arrows — move
-- `B` or `Q` — toggle build mode
-- `Q` (in build mode) — cycle structure (house / bench / wall / light)
-- `E` or click — place structure
+- `B` or `Q` — enter / exit build mode
+- `1`–`5` or click the palette — select House / Bench / Wall / Light / Decor
+- `Q` (in place mode) — cycle structure
+- `E` or left-click — place (blocked if tile occupied or materials insufficient)
+- `R` — toggle remove mode; `E` / click refunds materials and clears the tile
+- Ghost preview snaps to the 32×32 grid (green = ok, red = can't afford, orange = occupied)
 - Walk into the north **CAVE ENTRANCE** to enter the cave
 
 **Cave**
