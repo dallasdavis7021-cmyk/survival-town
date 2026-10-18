@@ -20,6 +20,7 @@ import {
   toolHelpLine,
   type ToolId,
 } from '../systems/PlayerTools';
+import { ensurePortalAssetsLoaded, placePortal } from '../systems/PortalAssets';
 import { ensureShapeTextures } from '../utils/textures';
 
 const MINE_RANGE = 56;
@@ -110,42 +111,39 @@ export class CaveScene extends Phaser.Scene {
     this.physics.add.collider(this.hostiles, this.walls);
     this.spawnFromMap();
 
-    void Promise.all([ensureMineralTexturesLoaded(this), ensureBiomeAssetsLoaded(this)]).then(
-      () => {
-        if (!this.sys.isActive()) {
-          return;
-        }
-        this.applyCaveFloorTextures();
-        this.gems.populate();
-        decorateCaveTrees(this, this.map.walkable, CAVE_TILE);
-      },
+    void Promise.all([
+      ensureMineralTexturesLoaded(this),
+      ensureBiomeAssetsLoaded(this),
+      ensurePortalAssetsLoaded(this),
+    ]).then(() => {
+      if (!this.sys.isActive()) {
+        return;
+      }
+      this.applyCaveFloorTextures();
+      this.gems.populate();
+      decorateCaveTrees(this, this.map.walkable, CAVE_TILE);
+      const exitKey = 'portal-cave-exit';
+      if (this.textures.exists(exitKey)) {
+        this.children.list.forEach((obj) => {
+          if (obj instanceof Phaser.GameObjects.Image && obj.texture.key === 'cave-exit') {
+            obj.setTexture(exitKey);
+            const tex = obj.texture.getSourceImage() as HTMLImageElement;
+            obj.setScale(72 / Math.max(1, tex.height));
+            obj.setOrigin(0.5, 0.85);
+          }
+        });
+      }
+    });
+
+    // Red-tinted cave exit portal (walk-in zone, no full-sprite blocker)
+    placePortal(
+      this,
+      this.map.exit.x,
+      this.map.exit.y,
+      'exit',
+      () => this.returnToTown(),
+      this.player,
     );
-
-    const exit = this.add.image(this.map.exit.x, this.map.exit.y, 'cave-exit').setDepth(6);
-    this.physics.add.existing(exit, true);
-    this.physics.add.overlap(this.player, exit, () => this.returnToTown());
-
-    this.add
-      .text(this.map.exit.x, this.map.exit.y - 28, 'RETURN TO TOWN', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '12px',
-        color: '#bbf7d0',
-        backgroundColor: '#14532d99',
-        padding: { x: 6, y: 3 },
-      })
-      .setOrigin(0.5)
-      .setDepth(7);
-
-    this.add
-      .text(this.map.spawn.x, this.map.spawn.y + 28, 'ENTRANCE', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#86efac',
-        backgroundColor: '#052e1699',
-        padding: { x: 4, y: 2 },
-      })
-      .setOrigin(0.5)
-      .setDepth(7);
 
     const cam = this.cameras.main;
     this.fogRt = this.add

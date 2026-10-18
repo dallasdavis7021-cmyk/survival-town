@@ -12,6 +12,7 @@ import {
   toolHelpLine,
   type ToolId,
 } from '../systems/PlayerTools';
+import { ensurePortalAssetsLoaded, placePortal } from '../systems/PortalAssets';
 import { WildernessMetalSpawner } from '../systems/WildernessMetalSpawner';
 import { ensureShapeTextures } from '../utils/textures';
 import { isSafeGrid, SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
@@ -116,22 +117,12 @@ export class TownScene extends Phaser.Scene {
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
     const gateX = safeCx;
-    const gateY = SAFE.y0 * GRID_SIZE + 16;
-    const gate = this.add.image(gateX, gateY, 'town-gate').setDepth(6);
-    this.physics.add.existing(gate, true);
-    this.physics.add.overlap(this.player, gate, () => this.enterCave());
+    const gateY = SAFE.y0 * GRID_SIZE + GRID_SIZE * 0.6;
+    // Placeholder until portal art loads; swapped in ensurePortalAssetsLoaded
+    placePortal(this, gateX, gateY, 'entrance', () => this.enterCave(), this.player);
 
     this.add
-      .text(gateX, gateY + 24, 'CAVE ENTRANCE', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '12px',
-        color: '#bae6fd',
-      })
-      .setOrigin(0.5)
-      .setDepth(7);
-
-    this.add
-      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 2.5, 'TOWN SAFE ZONE', {
+      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 3.2, 'TOWN SAFE ZONE', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '11px',
         color: '#bbf7d0',
@@ -158,18 +149,32 @@ export class TownScene extends Phaser.Scene {
       this.onRightClick(pointer);
     });
 
-    void Promise.all([ensureBiomeAssetsLoaded(this), ensureMineralTexturesLoaded(this)]).then(
-      () => {
-        if (!this.sys.isActive()) {
-          return;
-        }
-        if (!this.biomesReady) {
-          decorateOverworld(this, { safe: SAFE, seed: 0x51a7e });
-          this.biomesReady = true;
-        }
-        this.metals.populate();
-      },
-    );
+    void Promise.all([
+      ensureBiomeAssetsLoaded(this),
+      ensureMineralTexturesLoaded(this),
+      ensurePortalAssetsLoaded(this),
+    ]).then(() => {
+      if (!this.sys.isActive()) {
+        return;
+      }
+      if (!this.biomesReady) {
+        decorateOverworld(this, { safe: SAFE, seed: 0x51a7e });
+        this.biomesReady = true;
+      }
+      this.metals.populate();
+      // Refresh portal texture if it loaded after placeholder
+      const portalKey = 'portal-cave-entrance';
+      if (this.textures.exists(portalKey)) {
+        this.children.list.forEach((obj) => {
+          if (obj instanceof Phaser.GameObjects.Image && obj.texture.key === 'town-gate') {
+            obj.setTexture(portalKey);
+            const tex = obj.texture.getSourceImage() as HTMLImageElement;
+            obj.setScale(72 / Math.max(1, tex.height));
+            obj.setOrigin(0.5, 0.85);
+          }
+        });
+      }
+    });
 
     this.applyTool();
     this.refreshHud();

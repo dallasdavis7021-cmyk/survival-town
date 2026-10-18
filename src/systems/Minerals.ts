@@ -25,13 +25,13 @@ export const MINERAL_ASSET_PATH: Record<MineralId, string> = {
   diamond: '/minerals/diamond.png',
   emerald: '/minerals/emerald.png',
   sapphire: '/minerals/sapphire.png',
-  gold: '/minerals/gold.jpg',
+  gold: '/minerals/gold.png',
   iron: '/minerals/iron.png',
   silver: '/minerals/silver.png',
 };
 
-/** Display scale for top-down nodes (source art is large). */
-export const MINERAL_DISPLAY_SIZE = 28;
+/** Display height for top-down nodes (source art is large). */
+export const MINERAL_DISPLAY_HEIGHT = 32;
 
 export const CAVE_GEM_SPAWN_CHANCE = 0.28; // per gem type on cave enter (low)
 export const CAVE_GEM_RESPAWN_ON_LEAVE_CHANCE = 0.32;
@@ -77,7 +77,17 @@ export function ensureMineralTexturesLoaded(scene: Phaser.Scene): Promise<void> 
   });
 }
 
+/** Plant mineral art on the ground — transparent PNG, bottom-weighted origin. */
 export function styleMineralSprite(sprite: Phaser.GameObjects.Image): void {
-  sprite.setDisplaySize(MINERAL_DISPLAY_SIZE, MINERAL_DISPLAY_SIZE);
+  const tex = sprite.texture.getSourceImage() as HTMLImageElement | HTMLCanvasElement;
+  const srcH = Math.max(1, tex.height || 1);
+  const srcW = Math.max(1, tex.width || 1);
+  // Fit by height; clamp very wide piles (e.g. gold) so they stay compact
+  let scale = MINERAL_DISPLAY_HEIGHT / srcH;
+  if (srcW * scale > MINERAL_DISPLAY_HEIGHT * 1.4) {
+    scale = (MINERAL_DISPLAY_HEIGHT * 1.4) / srcW;
+  }
+  sprite.setScale(scale);
+  sprite.setOrigin(0.5, 0.9);
   sprite.setDepth(6);
 }
