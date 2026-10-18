@@ -1,11 +1,10 @@
 import Phaser from 'phaser';
 import {
-  biomeAt,
+  isSafeGrid,
   nearSafeFringe,
   SAFE_ZONE,
   WORLD_COLS,
   WORLD_ROWS,
-  type OverworldBiome,
   type SafeZone,
 } from '../world/Biomes';
 import {
@@ -46,8 +45,8 @@ function placeTree(
 }
 
 /**
- * Paints floor tiles + trees + autumn leaf scatter for the overworld.
- * Deterministic seed so layout is stable across reloads.
+ * Single grass overworld: light/dark trees (sparse) + a few autumn accents.
+ * Safe zone vs wilderness is gameplay-only (metals); no themed biome regions.
  */
 export function decorateOverworld(
   scene: Phaser.Scene,
@@ -58,14 +57,12 @@ export function decorateOverworld(
 
   for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
     for (let gx = 0; gx < WORLD_COLS; gx += 1) {
-      const biome = biomeAt(gx, gy, safe);
       const cx = gx * GRID_SIZE + GRID_SIZE / 2;
       const cy = gy * GRID_SIZE + GRID_SIZE / 2;
-      paintFloorTile(scene, biome, gx, gy, cx, cy);
+      paintGrassTile(scene, gx, gy, cx, cy);
     }
   }
 
-  // Safe-zone outline
   const g = scene.add.graphics().setDepth(2);
   g.lineStyle(2, 0x86efac, 0.55);
   g.strokeRect(
@@ -75,89 +72,72 @@ export function decorateOverworld(
     (safe.y1 - safe.y0 + 1) * GRID_SIZE,
   );
 
-  placeVillageTrees(scene, safe, rng);
-  placeBiomeTrees(scene, safe, rng);
-  placeAutumnLeaves(scene, safe, rng);
+  placeSparseTrees(scene, safe, rng);
 }
 
-function paintFloorTile(
+function paintGrassTile(
   scene: Phaser.Scene,
-  biome: OverworldBiome,
   gx: number,
   gy: number,
   cx: number,
   cy: number,
 ): void {
   const alt = (gx + gy) % 2 === 0;
-  let key = alt ? 'floor-grass' : 'floor-grass-b';
-  if (biome === 'snow') {
-    key = alt ? 'floor-snow' : 'floor-snow-b';
-  }
+  const key = alt ? 'floor-grass' : 'floor-grass-b';
 
   if (!scene.textures.exists(key)) {
-    // Fallback solid colors if assets not ready
-    const fallback =
-      biome === 'snow' ? 'tile-wild-b' : biome === 'safe' ? 'tile-grass' : 'tile-wild-a';
-    scene.add.image(cx, cy, fallback).setDepth(0).setDisplaySize(GRID_SIZE, GRID_SIZE);
+    scene.add.image(cx, cy, 'tile-grass').setDepth(0).setDisplaySize(GRID_SIZE, GRID_SIZE);
     return;
   }
 
   scene.add.image(cx, cy, key).setDepth(0).setDisplaySize(GRID_SIZE + 1, GRID_SIZE + 1);
 }
 
-function placeVillageTrees(
-  scene: Phaser.Scene,
-  safe: SafeZone,
-  rng: () => number,
-): void {
-  // Healthy ring around village, skip gate north-center cells
+/**
+ * Low density: light + dark mainly, a few autumn sprinkled in.
+ * Village fringe slightly denser than open wilderness; town center clear.
+ */
+function placeSparseTrees(scene: Phaser.Scene, safe: SafeZone, rng: () => number): void {
   const gateGx = Math.floor((safe.x0 + safe.x1) / 2);
+  let placed = 0;
+  const maxTrees = 48; // whole map — leave lots of open ground
+
   for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
     for (let gx = 0; gx < WORLD_COLS; gx += 1) {
-      if (!nearSafeFringe(gx, gy, safe, 2)) {
+      if (placed >= maxTrees) {
+        return;
+      }
+
+      // Keep deep town interior open for builds / decor
+      if (isSafeGrid(gx, gy, safe) && !nearSafeFringe(gx, gy, safe, 1)) {
         continue;
       }
-      // Keep cave approach clear
+
+      // Clear cave approach
       if (Math.abs(gx - gateGx) <= 2 && gy <= safe.y0 + 1) {
         continue;
       }
-      if (rng() > 0.42) {
-        continue;
-      }
-      const family: TreeFamily = rng() < 0.5 ? 'dark' : 'light';
-      const size = pickTreeSize(rng);
-      const jitter = (rng() - 0.5) * 10;
-      const { x, y } = {
-        x: gx * GRID_SIZE + GRID_SIZE / 2 + jitter,
-        y: gy * GRID_SIZE + GRID_SIZE / 2 + jitter * 0.4,
-      };
-      placeTree(scene, family, size, x, y);
-    }
-  }
-}
 
-function placeBiomeTrees(
-  scene: Phaser.Scene,
-  safe: SafeZone,
-  rng: () => number,
-): void {
-  for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
-    for (let gx = 0; gx < WORLD_COLS; gx += 1) {
-      const biome = biomeAt(gx, gy, safe);
-      if (biome === 'safe' || biome === 'snow') {
-        continue; // snow: no jungle/autumn trees; village handled separately
-      }
-      // Don't double-plant fringe heavily
-      if (nearSafeFringe(gx, gy, safe, 1) && rng() < 0.55) {
-        continue;
-      }
-      const chance = biome === 'jungle' ? 0.22 : 0.2;
+      const onFringe = nearSafeFringe(gx, gy, safe, 1);
+      // ~4–6% fringe, ~2% wilderness — much lower than multi-biome pass
+      const chance = onFringe ? 0.055 : 0.018;
       if (rng() > chance) {
         continue;
       }
-      const family: TreeFamily = biome === 'jungle' ? 'jungle' : 'autumn';
+
+      // Mostly light/dark; ~12% autumn accents
+      let family: TreeFamily;
+      const roll = rng();
+      if (roll < 0.12) {
+        family = 'autumn';
+      } else if (roll < 0.56) {
+        family = 'dark';
+      } else {
+        family = 'light';
+      }
+
       const size = pickTreeSize(rng);
-      const jitter = (rng() - 0.5) * 12;
+      const jitter = (rng() - 0.5) * 10;
       placeTree(
         scene,
         family,
@@ -165,38 +145,7 @@ function placeBiomeTrees(
         gx * GRID_SIZE + GRID_SIZE / 2 + jitter,
         gy * GRID_SIZE + GRID_SIZE / 2 + jitter * 0.35,
       );
-    }
-  }
-}
-
-function placeAutumnLeaves(
-  scene: Phaser.Scene,
-  safe: SafeZone,
-  rng: () => number,
-): void {
-  const keys = ['decor-leaves-xs', 'decor-leaves-sm', 'decor-leaves'] as const;
-  for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
-    for (let gx = 0; gx < WORLD_COLS; gx += 1) {
-      if (biomeAt(gx, gy, safe) !== 'autumn') {
-        continue;
-      }
-      if (rng() > 0.18) {
-        continue;
-      }
-      const key = keys[Math.floor(rng() * keys.length)];
-      if (!scene.textures.exists(key)) {
-        continue;
-      }
-      const img = scene.add.image(
-        gx * GRID_SIZE + GRID_SIZE / 2 + (rng() - 0.5) * 16,
-        gy * GRID_SIZE + GRID_SIZE / 2 + (rng() - 0.5) * 16,
-        key,
-      );
-      const scale = key === 'decor-leaves' ? 0.12 : key === 'decor-leaves-sm' ? 0.35 : 0.55;
-      img.setScale(scale);
-      img.setAlpha(0.85);
-      img.setDepth(1);
-      img.setRotation(rng() * Math.PI * 2);
+      placed += 1;
     }
   }
 }
@@ -212,7 +161,7 @@ export function decorateCaveTrees(
   const rows = walkable.length;
   const cols = walkable[0]?.length ?? 0;
   let placed = 0;
-  const maxTrees = 14; // sparse
+  const maxTrees = 14;
 
   for (let ty = 2; ty < rows - 2; ty += 1) {
     for (let tx = 2; tx < cols - 2; tx += 1) {
@@ -222,7 +171,6 @@ export function decorateCaveTrees(
       if (!walkable[ty][tx]) {
         continue;
       }
-      // Prefer slightly open spots (neighbors walkable)
       let open = 0;
       for (const [dx, dy] of [
         [1, 0],
@@ -241,7 +189,6 @@ export function decorateCaveTrees(
         continue;
       }
       const size = pickTreeSize(rng);
-      // Bias toward small/medium in corridors
       const useSize: TreeSize = open <= 2 ? (rng() < 0.7 ? 's' : 'm') : size;
       placeTree(
         scene,

@@ -14,14 +14,7 @@ import {
 } from '../systems/PlayerTools';
 import { WildernessMetalSpawner } from '../systems/WildernessMetalSpawner';
 import { ensureShapeTextures } from '../utils/textures';
-import {
-  biomeAt,
-  biomeLabel,
-  isSafeGrid,
-  SAFE_ZONE,
-  WORLD_COLS,
-  WORLD_ROWS,
-} from '../world/Biomes';
+import { isSafeGrid, SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
 
 const MAP_W = WORLD_COLS * GRID_SIZE;
 const MAP_H = WORLD_ROWS * GRID_SIZE;
@@ -137,7 +130,16 @@ export class TownScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setDepth(7);
 
-    this.addBiomeLabels(safeCx);
+    this.add
+      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 2.5, 'TOWN SAFE ZONE', {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: '11px',
+        color: '#bbf7d0',
+        backgroundColor: '#14532d66',
+        padding: { x: 6, y: 2 },
+      })
+      .setOrigin(0.5)
+      .setDepth(3);
 
     const keyboard = this.input.keyboard;
     if (!keyboard) {
@@ -195,49 +197,6 @@ export class TownScene extends Phaser.Scene {
     this.metals.update(this.player, this.cameras.main);
     this.movePlayer();
     this.refreshHud();
-  }
-
-  private addBiomeLabels(safeCx: number): void {
-    this.add
-      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 2.5, 'TOWN SAFE ZONE', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#bbf7d0',
-        backgroundColor: '#14532d66',
-        padding: { x: 6, y: 2 },
-      })
-      .setOrigin(0.5)
-      .setDepth(3);
-
-    this.add
-      .text(GRID_SIZE * 4, GRID_SIZE * 3, 'SNOW', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#e2e8f0',
-        backgroundColor: '#33415588',
-        padding: { x: 6, y: 2 },
-      })
-      .setDepth(3);
-
-    this.add
-      .text(GRID_SIZE * 2, MAP_H / 2, 'JUNGLE', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#bbf7d0',
-        backgroundColor: '#14532d88',
-        padding: { x: 6, y: 2 },
-      })
-      .setDepth(3);
-
-    this.add
-      .text(MAP_W - GRID_SIZE * 5, MAP_H / 2, 'AUTUMN', {
-        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-        fontSize: '11px',
-        color: '#ffedd5',
-        backgroundColor: '#9a341288',
-        padding: { x: 6, y: 2 },
-      })
-      .setDepth(3);
   }
 
   private isInSafeZone(worldX: number, worldY: number): boolean {
@@ -331,10 +290,7 @@ export class TownScene extends Phaser.Scene {
 
   private refreshHud(): void {
     const inv = gameState.inventory;
-    const gx = Math.floor(this.player.x / GRID_SIZE);
-    const gy = Math.floor(this.player.y / GRID_SIZE);
-    const biome = biomeAt(gx, gy, SAFE);
-    const inSafe = biome === 'safe';
+    const inSafe = this.isInSafeZone(this.player.x, this.player.y);
     const buildExtra =
       this.tool === 'building'
         ? ` · ${this.placement.selectedLabel} (${this.placement.selectedCost}) · LMB/R remove`
@@ -343,8 +299,8 @@ export class TownScene extends Phaser.Scene {
     this.hud.setText(
       [
         inSafe
-          ? 'TOWN SAFE ZONE — grass · village trees · no metals/hostiles'
-          : `${biomeLabel(biome).toUpperCase()} BIOME — ${biome === 'snow' ? 'snow floor' : 'grass + trees'}${biome === 'autumn' ? ' + leaves' : ''}`,
+          ? 'TOWN SAFE ZONE — no hostiles · no wilderness metals'
+          : 'WILDERNESS — gold / iron / silver (RMB mine)',
         `HP ${gameState.player.hp}/${gameState.player.maxHp}`,
         `Inv: wood ${inv.wood} stone ${inv.stone} ore ${inv.ore}  gems ${inv.diamond}d/${inv.emerald}e/${inv.sapphire}s  metals ${inv.gold}g/${inv.iron}i/${inv.silver}s`,
         `Active: ${TOOL_LABELS[this.tool]}${buildExtra}`,
@@ -354,19 +310,13 @@ export class TownScene extends Phaser.Scene {
     this.help.setText(`${toolHelpLine(this.tool)}  ·  WASD move  ·  north gate → cave`);
     this.help.setPosition(12, this.scale.height - (this.tool === 'building' ? 140 : 52));
 
-    const label =
-      biome === 'safe' ? 'SAFE' : biome === 'jungle' ? 'JUNGLE' : biome === 'autumn' ? 'AUTUMN' : 'SNOW';
-    const colors: Record<string, { color: string; bg: string }> = {
-      SAFE: { color: '#bbf7d0', bg: '#14532d99' },
-      JUNGLE: { color: '#bbf7d0', bg: '#14532d99' },
-      AUTUMN: { color: '#ffedd5', bg: '#9a341299' },
-      SNOW: { color: '#e2e8f0', bg: '#33415599' },
-    };
-    const c = colors[label];
     this.zoneLabel
-      .setText(label)
+      .setText(inSafe ? 'SAFE' : 'WILD')
       .setPosition(this.scale.width - 12, 12)
-      .setStyle({ color: c.color, backgroundColor: c.bg });
+      .setStyle({
+        color: inSafe ? '#bbf7d0' : '#fde68a',
+        backgroundColor: inSafe ? '#14532d99' : '#42200699',
+      });
   }
 
   private floatHint(msg: string): void {
@@ -403,18 +353,7 @@ export class TownScene extends Phaser.Scene {
       for (let gx = 0; gx < WORLD_COLS; gx += 1) {
         const cx = gx * GRID_SIZE + GRID_SIZE / 2;
         const cy = gy * GRID_SIZE + GRID_SIZE / 2;
-        const biome = biomeAt(gx, gy, SAFE);
-        const key =
-          biome === 'snow'
-            ? (gx + gy) % 2 === 0
-              ? 'tile-wild-b'
-              : 'tile-wild-a'
-            : biome === 'safe'
-              ? 'tile-grass'
-              : (gx + gy) % 2 === 0
-                ? 'tile-wild-a'
-                : 'tile-wild-b';
-        this.add.image(cx, cy, key).setDepth(0).setAlpha(0.9);
+        this.add.image(cx, cy, 'tile-grass').setDepth(0).setAlpha(0.9);
       }
     }
   }
