@@ -9,6 +9,7 @@ import {
 import { gameState, type InventoryItemId } from '../state/GameState';
 import { ensureBiomeAssetsLoaded } from '../systems/BiomeAssets';
 import { decorateCaveTrees } from '../systems/BiomeDecorator';
+import { ensureCaveCreatureLoaded, styleCaveCreature } from '../systems/CaveCreature';
 import { CaveGemSpawner } from '../systems/CaveGemSpawner';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
@@ -115,6 +116,8 @@ export class CaveScene extends Phaser.Scene {
         playPlayerHurt(this.player);
         this.refreshHud();
       },
+      walkable: this.map.walkable,
+      rooms: this.map.rooms,
     });
 
     this.physics.add.collider(this.hostiles, this.walls);
@@ -125,6 +128,7 @@ export class CaveScene extends Phaser.Scene {
       ensureBiomeAssetsLoaded(this),
       ensurePortalAssetsLoaded(this),
       ensurePlayerSpriteLoaded(this),
+      ensureCaveCreatureLoaded(this),
     ]).then(() => {
       if (!this.sys.isActive()) {
         return;
@@ -132,6 +136,14 @@ export class CaveScene extends Phaser.Scene {
       this.applyCaveFloorTextures();
       this.gems.populate();
       decorateCaveTrees(this, this.map.walkable, CAVE_TILE);
+      // Restyle hostiles once atlas is ready (Boot usually preloads first)
+      this.hostiles.children.each((child) => {
+        const h = child as HostileSprite;
+        if (h.active && this.textures.exists('cave-creature-sheet')) {
+          styleCaveCreature(h, h.config.tier);
+        }
+        return true;
+      });
       const exitKey = 'portal-cave-exit';
       if (this.textures.exists(exitKey)) {
         this.children.list.forEach((obj) => {
@@ -375,10 +387,7 @@ export class CaveScene extends Phaser.Scene {
                 aggroRange: 150,
               };
 
-      const hostile = this.combat.spawnHostile(h.point.x, h.point.y, cfg);
-      const body = hostile.body as Phaser.Physics.Arcade.Body;
-      body.setSize(16, 16);
-      body.setOffset(3, 3);
+      this.combat.spawnHostile(h.point.x, h.point.y, cfg);
     }
 
     for (const o of this.map.ores) {

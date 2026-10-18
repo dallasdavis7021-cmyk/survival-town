@@ -1,5 +1,16 @@
 import Phaser from 'phaser';
+import { CAVE_TILE, type CaveRoom } from '../maps/caveLayout';
 import { gameState } from '../state/GameState';
+import {
+  constrainToWalkable,
+  facingFromVelocity,
+  findRoomAt,
+  pickRoomPatrolTarget,
+  styleCaveCreature,
+  updateCreatureAnim,
+  CREATURE_TEXTURE,
+} from './CaveCreature';
+import type { FacingDir } from './PlayerSprite';
 
 export interface HostileConfig {
   hp: number;
@@ -33,6 +44,10 @@ export type HostileSprite = Phaser.Physics.Arcade.Sprite & {
   stunUntil: number;
   aggroed: boolean;
   config: HostileConfig;
+  homeRoom: CaveRoom | null;
+  patrolTarget: { x: number; y: number } | null;
+  facingDir: FacingDir;
+  attackingUntil: number;
 };
 
 type AttackPhase = 'idle' | 'windup' | 'active' | 'recovery';
@@ -43,10 +58,12 @@ const RECOVERY_MS = 240;
 const PLAYER_KNOCKBACK = 340;
 const HOSTILE_HIT_STUN_MS = 280;
 const PLAYER_HIT_STUN_MS = 160;
+const PATROL_SPEED = 42;
 
 /**
  * Decoupled melee combat — intended for cave/wilderness scenes only.
  * Directional swings use wind-up → active hit window → recovery.
+ * Hostiles use cave-creature atlas when loaded.
  */
 export class CombatSystem {
   private scene: Phaser.Scene;
@@ -63,6 +80,8 @@ export class CombatSystem {
   private onPlayerHurt?: () => void;
   private readonly attackReach = 46;
   private readonly attackHalfWidth = 38;
+  private walkable: boolean[][] | null = null;
+  private rooms: CaveRoom[] = [];
 
   constructor(
     scene: Phaser.Scene,
@@ -71,6 +90,8 @@ export class CombatSystem {
     options?: {
       onHostileKilled?: (hostile: HostileSprite, x: number, y: number) => void;
       onPlayerHurt?: () => void;
+      walkable?: boolean[][];
+      rooms?: CaveRoom[];
     },
   ) {
     this.scene = scene;
@@ -78,13 +99,19 @@ export class CombatSystem {
     this.hostiles = hostiles;
     this.onHostileKilled = options?.onHostileKilled;
     this.onPlayerHurt = options?.onPlayerHurt;
+    this.walkable = options?.walkable ?? null;
+    this.rooms = options?.rooms ?? [];
+  }
+
+  setCaveNav(walkable: boolean[][], rooms: CaveRoom[]): void {
+    this.walkable = walkable;
+    this.rooms = rooms;
   }
 
   get facingVector(): Phaser.Math.Vector2 {
     return this.facing.clone();
   }
 
-  /** Start a directional melee swing (call from RMB in Weapon tool mode). */
   tryStartAttack(time = this.scene.time.now): boolean {
     if (this.phase !== 'idle' || time < this.playerStunUntil) {
       return false;
@@ -101,27 +128,38 @@ export class CombatSystem {
     return this.scene.time.now < this.playerStunUntil;
   }
 
-  /** True while wind-up/active/recovery — callers can reduce move speed. */
   get isAttackLocked(): boolean {
     return this.phase !== 'idle';
   }
 
   spawnHostile(x: number, y: number, config: Partial<HostileConfig> = {}): HostileSprite {
     const merged: HostileConfig = { ...DEFAULT_HOSTILE, ...config };
-    const texture = merged.tier >= 3 ? 'hostile-elite' : merged.tier === 2 ? 'hostile-mid' : 'hostile';
-    const sprite = this.hostiles.create(x, y, texture) as HostileSprite;
+    const useCreature = this.scene.textures.exists(CREATURE_TEXTURE);
+    const fallback =
+      merged.tier >= 3 ? 'hostile-elite' : merged.tier === 2 ? 'hostile-mid' : 'hostile';
+    const sprite = this.hostiles.create(x, y, useCreature ? CREATURE_TEXTURE : fallback) as HostileSprite;
     sprite.setCollideWorldBounds(true);
     sprite.setBounce(0.02);
-    sprite.setScale(merged.scale ?? (merged.tier === 3 ? 1.2 : merged.tier === 2 ? 1.05 : 1));
-    if (merged.tint !== undefined) {
-      sprite.setTint(merged.tint);
+
+    if (useCreature) {
+      styleCaveCreature(sprite, merged.tier);
+    } else {
+      sprite.setScale(merged.scale ?? (merged.tier === 3 ? 1.2 : merged.tier === 2 ? 1.05 : 1));
+      if (merged.tint !== undefined) {
+        sprite.setTint(merged.tint);
+      }
     }
+
     sprite.hostileHp = merged.hp;
     sprite.hostileMaxHp = merged.hp;
     sprite.lastAttackAt = 0;
     sprite.stunUntil = 0;
     sprite.aggroed = false;
     sprite.config = merged;
+    sprite.homeRoom = findRoomAt(this.rooms, x, y);
+    sprite.patrolTarget = sprite.homeRoom ? pickRoomPatrolTarget(sprite.homeRoom) : null;
+    sprite.facingDir = 'down';
+    sprite.attackingUntil = 0;
     sprite.setData('isHostile', true);
     sprite.setData('tier', merged.tier);
     return sprite;
@@ -167,33 +205,23 @@ export class CombatSystem {
       .image(reachX, reachY, 'melee-arc')
       .setDepth(28)
       .setAlpha(0.55)
-      .setRotation(Math.atan2(this.swingDir.y, this.swingDir.x));
-
-    this.player.setTint(0xa7f3d0);
+      .setRotation(this.swingDir.angle());
   }
 
   private updateAttackPhase(time: number): void {
     if (this.phase === 'idle') {
       return;
     }
-
     if (time < this.phaseEndsAt) {
-      if (this.phase === 'windup' && this.swingTelegraph) {
-        const t = 1 - (this.phaseEndsAt - time) / WINDUP_MS;
-        this.swingTelegraph.setAlpha(0.35 + t * 0.45);
-        this.swingTelegraph.setPosition(
-          this.player.x + this.swingDir.x * (16 + t * 10),
-          this.player.y + this.swingDir.y * (16 + t * 10),
-        );
-      }
       return;
     }
 
     if (this.phase === 'windup') {
       this.phase = 'active';
       this.phaseEndsAt = time + ACTIVE_MS;
-      this.player.setTintFill(0xffffff);
-      this.spawnSwingSpark();
+      this.player.setTint(0xa7f3d0);
+      this.swingTelegraph?.destroy();
+      this.swingTelegraph = undefined;
       return;
     }
 
@@ -201,27 +229,11 @@ export class CombatSystem {
       this.phase = 'recovery';
       this.phaseEndsAt = time + RECOVERY_MS;
       this.player.clearTint();
-      this.swingTelegraph?.destroy();
-      this.swingTelegraph = undefined;
       return;
     }
 
-    // recovery → idle
     this.phase = 'idle';
     this.player.clearTint();
-  }
-
-  private spawnSwingSpark(): void {
-    const reachX = this.player.x + this.swingDir.x * 26;
-    const reachY = this.player.y + this.swingDir.y * 26;
-    const spark = this.scene.add.image(reachX, reachY, 'hit-spark').setDepth(30).setScale(1.2);
-    this.scene.tweens.add({
-      targets: spark,
-      alpha: 0,
-      scale: 2.2,
-      duration: 140,
-      onComplete: () => spark.destroy(),
-    });
   }
 
   private resolveActiveHits(): void {
@@ -230,22 +242,21 @@ export class CombatSystem {
 
     this.hostiles.children.each((child) => {
       const hostile = child as HostileSprite;
-      if (!hostile.active || this.hitThisSwing.has(hostile)) {
+      if (!hostile.active || this.hitThisSwing.has(hostile) || hostile.hostileHp <= 0) {
         return true;
       }
 
-      const toEnemyX = hostile.x - originX;
-      const toEnemyY = hostile.y - originY;
-      const dist = Math.hypot(toEnemyX, toEnemyY);
-      if (dist > this.attackReach || dist < 1) {
+      const dist = Phaser.Math.Distance.Between(originX, originY, hostile.x, hostile.y);
+      if (dist > this.attackReach) {
         return true;
       }
 
-      const nx = toEnemyX / dist;
-      const ny = toEnemyY / dist;
-      const dot = nx * this.swingDir.x + ny * this.swingDir.y;
-      // ~90° forward cone
-      if (dot < 0.15) {
+      const dx = hostile.x - originX;
+      const dy = hostile.y - originY;
+      const nx = dx / (dist || 1);
+      const ny = dy / (dist || 1);
+      const forward = nx * this.swingDir.x + ny * this.swingDir.y;
+      if (forward < 0.15) {
         return true;
       }
 
@@ -272,9 +283,6 @@ export class CombatSystem {
     this.scene.time.delayedCall(70, () => {
       if (hostile.active) {
         hostile.clearTint();
-        if (hostile.aggroed) {
-          hostile.setTint(0xfca5a5);
-        }
       }
     });
 
@@ -293,8 +301,16 @@ export class CombatSystem {
 
     if (hostile.hostileHp <= 0) {
       const { x, y } = hostile;
-      this.onHostileKilled?.(hostile, x, y);
-      hostile.destroy();
+      // Brief downed pose before remove
+      updateCreatureAnim(hostile, hostile.facingDir, false, 'downed');
+      body?.setVelocity(0, 0);
+      this.scene.time.delayedCall(280, () => {
+        if (!hostile.active) {
+          return;
+        }
+        this.onHostileKilled?.(hostile, x, y);
+        hostile.destroy();
+      });
     }
   }
 
@@ -304,8 +320,16 @@ export class CombatSystem {
       return;
     }
 
+    if (hostile.hostileHp <= 0) {
+      body.setVelocity(0, 0);
+      updateCreatureAnim(hostile, hostile.facingDir, false, 'downed');
+      return;
+    }
+
     if (time < hostile.stunUntil) {
-      // Keep knockback; don't steer during stun.
+      if (this.walkable) {
+        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
+      }
       return;
     }
 
@@ -319,49 +343,109 @@ export class CombatSystem {
     const inAggro = dist <= hostile.config.aggroRange;
     if (inAggro && !hostile.aggroed) {
       hostile.aggroed = true;
-      hostile.setTint(0xfca5a5);
-      // Brief aggro pop so chase reads clearly
       this.scene.tweens.add({
         targets: hostile,
-        scale: hostile.scale * 1.15,
+        scale: hostile.scale * 1.12,
         duration: 90,
         yoyo: true,
       });
-    } else if (!inAggro && hostile.aggroed && dist > hostile.config.aggroRange * 1.25) {
+    } else if (!inAggro && hostile.aggroed && dist > hostile.config.aggroRange * 1.35) {
       hostile.aggroed = false;
-      hostile.clearTint();
-      if (hostile.config.tint !== undefined) {
-        hostile.setTint(hostile.config.tint);
+      hostile.patrolTarget = hostile.homeRoom ? pickRoomPatrolTarget(hostile.homeRoom) : null;
+    }
+
+    if (time < hostile.attackingUntil) {
+      body.setVelocity(0, 0);
+      updateCreatureAnim(hostile, hostile.facingDir, false, 'attack');
+      if (this.walkable) {
+        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
       }
+      return;
     }
 
     if (!hostile.aggroed) {
+      this.patrolHostile(hostile);
+    } else {
+      this.scene.physics.moveToObject(hostile, this.player, hostile.config.speed);
+      // Keep chase roughly on walkables (walls already collide; also soft-clamp)
+      if (this.walkable) {
+        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
+      }
+
+      if (
+        dist <= hostile.config.attackRange &&
+        time - hostile.lastAttackAt >= hostile.config.attackCooldownMs &&
+        time >= this.playerStunUntil
+      ) {
+        hostile.lastAttackAt = time;
+        hostile.attackingUntil = time + 320;
+        hostile.facingDir = facingFromVelocity(
+          this.player.x - hostile.x,
+          this.player.y - hostile.y,
+        );
+        updateCreatureAnim(hostile, hostile.facingDir, false, 'attack');
+
+        gameState.damage(hostile.config.damage);
+        this.onPlayerHurt?.();
+
+        const angle = Phaser.Math.Angle.Between(hostile.x, hostile.y, this.player.x, this.player.y);
+        const playerBody = this.player.body as Phaser.Physics.Arcade.Body | undefined;
+        const kb = hostile.config.knockback || PLAYER_KNOCKBACK;
+        playerBody?.setVelocity(Math.cos(angle) * kb, Math.sin(angle) * kb);
+        this.playerStunUntil = time + PLAYER_HIT_STUN_MS;
+        this.player.setTintFill(0xff8888);
+        this.scene.time.delayedCall(100, () => {
+          if (this.player.active && this.phase === 'idle') {
+            this.player.clearTint();
+          }
+        });
+      }
+    }
+
+    const vx = body.velocity.x;
+    const vy = body.velocity.y;
+    const moving = Math.abs(vx) > 6 || Math.abs(vy) > 6;
+    if (moving) {
+      hostile.facingDir = facingFromVelocity(vx, vy);
+    }
+    updateCreatureAnim(hostile, hostile.facingDir, moving, 'loco');
+
+    if (this.walkable) {
+      constrainToWalkable(hostile, this.walkable, CAVE_TILE);
+    }
+  }
+
+  private patrolHostile(hostile: HostileSprite): void {
+    const body = hostile.body as Phaser.Physics.Arcade.Body | undefined;
+    if (!body) {
+      return;
+    }
+    const room = hostile.homeRoom;
+    if (!room) {
       body.setVelocity(0, 0);
       return;
     }
 
-    this.scene.physics.moveToObject(hostile, this.player, hostile.config.speed);
-
     if (
-      dist <= hostile.config.attackRange &&
-      time - hostile.lastAttackAt >= hostile.config.attackCooldownMs &&
-      time >= this.playerStunUntil
+      !hostile.patrolTarget ||
+      Phaser.Math.Distance.Between(
+        hostile.x,
+        hostile.y,
+        hostile.patrolTarget.x,
+        hostile.patrolTarget.y,
+      ) < 10
     ) {
-      hostile.lastAttackAt = time;
-      gameState.damage(hostile.config.damage);
-      this.onPlayerHurt?.();
-
-      const angle = Phaser.Math.Angle.Between(hostile.x, hostile.y, this.player.x, this.player.y);
-      const playerBody = this.player.body as Phaser.Physics.Arcade.Body | undefined;
-      const kb = hostile.config.knockback || PLAYER_KNOCKBACK;
-      playerBody?.setVelocity(Math.cos(angle) * kb, Math.sin(angle) * kb);
-      this.playerStunUntil = time + PLAYER_HIT_STUN_MS;
-      this.player.setTintFill(0xff8888);
-      this.scene.time.delayedCall(100, () => {
-        if (this.player.active && this.phase === 'idle') {
-          this.player.clearTint();
-        }
-      });
+      hostile.patrolTarget = pickRoomPatrolTarget(room);
     }
+
+    if (!hostile.patrolTarget) {
+      body.setVelocity(0, 0);
+      return;
+    }
+
+    const dx = hostile.patrolTarget.x - hostile.x;
+    const dy = hostile.patrolTarget.y - hostile.y;
+    const len = Math.hypot(dx, dy) || 1;
+    body.setVelocity((dx / len) * PATROL_SPEED, (dy / len) * PATROL_SPEED);
   }
 }
