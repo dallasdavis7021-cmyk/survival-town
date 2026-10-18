@@ -66,11 +66,31 @@ export function ensureShapeTextures(scene: Phaser.Scene): void {
   }
   rect('tile-grass', 32, 32, 0x3f6212);
   rect('tile-path', 32, 32, 0x854d0e);
+  // Legacy navy cave tiles (unused by walkway map; kept for safety)
   rect('tile-cave', 32, 32, 0x1e293b);
   rect('tile-cave-alt', 32, 32, 0x0f172a);
   rect('tile-cave-mid', 32, 32, 0x172554);
   rect('tile-cave-deep', 32, 32, 0x1a0a2e);
   rect('tile-cave-path', 32, 32, 0x365314);
+
+  // Cave walkway art direction: darker red rock, near-black floor
+  rect('cave-rock', 32, 32, 0x3a0c0c);
+  rect('cave-rock-deep', 32, 32, 0x2a0808);
+  rect('cave-floor', 32, 32, 0x050505);
+  rect('cave-floor-dim', 32, 32, 0x0a0808);
+  // 1px crisp outline strip textures for corridor edges
+  if (!scene.textures.exists('cave-edge-h')) {
+    g.clear();
+    g.fillStyle(0xd4d0c8, 1);
+    g.fillRect(0, 0, 32, 2);
+    g.generateTexture('cave-edge-h', 32, 2);
+  }
+  if (!scene.textures.exists('cave-edge-v')) {
+    g.clear();
+    g.fillStyle(0xd4d0c8, 1);
+    g.fillRect(0, 0, 2, 32);
+    g.generateTexture('cave-edge-v', 2, 32);
+  }
 
   g.destroy();
 }
