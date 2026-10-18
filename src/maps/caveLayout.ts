@@ -33,6 +33,16 @@ export interface CavePoint {
   y: number;
 }
 
+/** Carved chamber (not corridors) — gem spawn candidates. */
+export interface CaveRoom {
+  id: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  tiles: CavePoint[];
+}
+
 export interface ParsedCaveMap {
   cols: number;
   rows: number;
@@ -40,6 +50,7 @@ export interface ParsedCaveMap {
   height: number;
   cells: CaveCell[][];
   walkable: boolean[][];
+  rooms: CaveRoom[];
   spawn: CavePoint;
   exit: CavePoint;
   hostiles: { point: CavePoint; tier: 1 | 2 | 3 }[];
@@ -92,8 +103,23 @@ function carveV(grid: CaveCell[][], x: number, y0: number, y1: number, width = 1
   }
 }
 
+/** Room rectangles only (corridors carved separately). */
+const ROOM_RECTS: { id: string; x0: number; y0: number; x1: number; y1: number }[] = [
+  { id: 'nw-abyss', x0: 4, y0: 2, x1: 18, y1: 8 },
+  { id: 'ne-abyss', x0: 32, y0: 3, x1: 47, y1: 9 },
+  { id: 'n-alcove', x0: 4, y0: 14, x1: 14, y1: 18 },
+  { id: 'ne-alcove', x0: 34, y0: 12, x1: 46, y1: 17 },
+  { id: 'w-depths', x0: 3, y0: 23, x1: 16, y1: 29 },
+  { id: 'e-depths', x0: 34, y0: 24, x1: 48, y1: 30 },
+  { id: 'sw-depths', x0: 3, y0: 34, x1: 12, y1: 38 },
+  { id: 'se-depths', x0: 36, y0: 33, x1: 47, y1: 38 },
+  { id: 'w-shallow', x0: 4, y0: 40, x1: 15, y1: 45 },
+  { id: 'e-shallow', x0: 34, y0: 40, x1: 46, y1: 46 },
+  { id: 'sw-foyer', x0: 4, y0: 49, x1: 14, y1: 52 },
+];
+
 /** Deterministic maze: spine + chambers + bottlenecks. */
-function carveCaveGrid(): CaveCell[][] {
+function carveCaveGrid(): { grid: CaveCell[][]; rooms: CaveRoom[] } {
   const g = fillWalls(CAVE_COLS, CAVE_ROWS);
   const spine = 26;
 
@@ -102,16 +128,15 @@ function carveCaveGrid(): CaveCell[][] {
   carveV(g, spine, CAVE_ROWS - 8, CAVE_ROWS - 3, 3); // foyer
 
   // --- Abyss chambers (north) ---
-  carveRect(g, 4, 2, 18, 8); // large NW room
+  carveRect(g, 4, 2, 18, 8);
   carveH(g, 5, 18, spine, 1);
-  carveRect(g, 32, 3, 47, 9); // NE room
+  carveRect(g, 32, 3, 47, 9);
   carveH(g, 6, spine, 32, 1);
-  carveV(g, 10, 8, 14, 1); // bottleneck down from NW
-  carveRect(g, 4, 14, 14, 18); // small mid-north alcove
+  carveV(g, 10, 8, 14, 1);
+  carveRect(g, 4, 14, 14, 18);
   carveH(g, 16, 14, spine, 1);
   carveRect(g, 34, 12, 46, 17);
   carveH(g, 14, spine, 34, 1);
-  // tight dual bottleneck
   carveV(g, spine - 1, 19, 22, 1);
   carveV(g, spine + 1, 19, 22, 1);
   carveH(g, 20, spine - 1, spine + 1, 1);
@@ -126,7 +151,6 @@ function carveCaveGrid(): CaveCell[][] {
   carveH(g, 36, 12, spine, 1);
   carveRect(g, 36, 33, 47, 38);
   carveH(g, 35, spine, 36, 1);
-  // winding mid corridor
   carveH(g, 31, spine, spine + 8, 1);
   carveV(g, spine + 8, 31, 33, 1);
   carveH(g, 33, spine + 2, spine + 8, 1);
@@ -140,12 +164,23 @@ function carveCaveGrid(): CaveCell[][] {
   carveRect(g, 4, 49, 14, 52);
   carveH(g, 50, 14, spine, 1);
 
-  // South foyer arms to exit (west) and spawn (east)
   carveH(g, CAVE_ROWS - 4, 8, spine + 12, 2);
-  carveRect(g, 8, CAVE_ROWS - 5, 12, CAVE_ROWS - 3); // exit pad
-  carveRect(g, spine + 8, CAVE_ROWS - 5, spine + 14, CAVE_ROWS - 3); // spawn pad
+  carveRect(g, 8, CAVE_ROWS - 5, 12, CAVE_ROWS - 3);
+  carveRect(g, spine + 8, CAVE_ROWS - 5, spine + 14, CAVE_ROWS - 3);
 
-  return g;
+  const rooms: CaveRoom[] = ROOM_RECTS.map((r) => {
+    const tiles: CavePoint[] = [];
+    for (let ty = r.y0; ty <= r.y1; ty += 1) {
+      for (let tx = r.x0; tx <= r.x1; tx += 1) {
+        if (g[ty]?.[tx] && g[ty][tx] !== 'wall') {
+          tiles.push(point(tx, ty));
+        }
+      }
+    }
+    return { ...r, tiles };
+  }).filter((r) => r.tiles.length > 0);
+
+  return { grid: g, rooms };
 }
 
 function placeMarker(grid: CaveCell[][], tx: number, ty: number, cell: CaveCell): void {
@@ -210,7 +245,7 @@ function bakeMarkers(grid: CaveCell[][]): void {
 
 /** Parse / bake the deterministic cave tilemap. */
 export function parseCaveLayout(): ParsedCaveMap {
-  const cells = carveCaveGrid();
+  const { grid: cells, rooms } = carveCaveGrid();
   bakeMarkers(cells);
 
   const walkable = cells.map((row) => row.map((c) => c !== 'wall'));
@@ -245,6 +280,7 @@ export function parseCaveLayout(): ParsedCaveMap {
     height: CAVE_ROWS * CAVE_TILE,
     cells,
     walkable,
+    rooms,
     spawn,
     exit,
     hostiles,

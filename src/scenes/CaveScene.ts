@@ -7,8 +7,10 @@ import {
   type ParsedCaveMap,
 } from '../maps/caveLayout';
 import { gameState, type InventoryItemId } from '../state/GameState';
+import { CaveGemSpawner } from '../systems/CaveGemSpawner';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
+import { ensureMineralTexturesLoaded } from '../systems/Minerals';
 import {
   cycleTool,
   getActiveTool,
@@ -44,6 +46,7 @@ export class CaveScene extends Phaser.Scene {
   private pickupKey!: Phaser.Input.Keyboard.Key;
   private combat!: CombatSystem;
   private loot!: LootDrops;
+  private gems!: CaveGemSpawner;
   private hostiles!: Phaser.Physics.Arcade.Group;
   private oreNodes!: Phaser.Physics.Arcade.StaticGroup;
   private hud!: Phaser.GameObjects.Text;
@@ -95,6 +98,7 @@ export class CaveScene extends Phaser.Scene {
         this.runLoot[id] = (this.runLoot[id] ?? 0) + amount;
       },
     });
+    this.gems = new CaveGemSpawner(this, this.map);
 
     this.combat = new CombatSystem(this, this.player, this.hostiles, {
       onHostileKilled: (hostile, x, y) => this.onHostileKilled(hostile, x, y),
@@ -103,6 +107,13 @@ export class CaveScene extends Phaser.Scene {
 
     this.physics.add.collider(this.hostiles, this.walls);
     this.spawnFromMap();
+
+    void ensureMineralTexturesLoaded(this).then(() => {
+      if (!this.sys.isActive()) {
+        return;
+      }
+      this.gems.populate();
+    });
 
     const exit = this.add.image(this.map.exit.x, this.map.exit.y, 'cave-exit').setDepth(6);
     this.physics.add.existing(exit, true);
@@ -455,6 +466,11 @@ export class CaveScene extends Phaser.Scene {
       return;
     }
 
+    if (this.gems.tryMineNear(cursorX, cursorY, this.player.x, this.player.y, MINE_RANGE)) {
+      this.refreshHud();
+      return;
+    }
+
     const nodes = this.oreNodes.getChildren() as Phaser.Physics.Arcade.Sprite[];
     const inPlayerRange = nodes.filter(
       (n) =>
@@ -463,7 +479,7 @@ export class CaveScene extends Phaser.Scene {
     );
 
     if (inPlayerRange.length === 0) {
-      this.floatText(this.player.x, this.player.y - 20, 'No ore in range', '#94a3b8');
+      this.floatText(this.player.x, this.player.y - 20, 'Nothing to mine in range', '#94a3b8');
       return;
     }
 
@@ -586,8 +602,8 @@ export class CaveScene extends Phaser.Scene {
       [
         `CAVE TIER ${this.currentTier} — ${tierName}  ·  light ${this.lightRadius}px`,
         `HP ${gameState.player.hp}/${gameState.player.maxHp}  ·  Active: ${TOOL_LABELS[this.tool]}${this.tool === 'weapon' ? ` (${swing})` : ''}`,
-        `Inv: wood ${inv.wood} stone ${inv.stone} ore ${inv.ore} scrap ${inv.scrap} crystal ${inv.crystal}`,
-        `Picked up this run: ${runBits || '—'}  ·  follow path → RETURN TO TOWN`,
+        `Inv: ore ${inv.ore} scrap ${inv.scrap}  gems ${inv.diamond}d/${inv.emerald}e/${inv.sapphire}s  metals ${inv.gold}g/${inv.iron}i/${inv.silver}s`,
+        `Picked up this run: ${runBits || '—'}  ·  gems in rooms  ·  path → RETURN TO TOWN`,
       ].join('\n'),
     );
 
@@ -619,12 +635,14 @@ export class CaveScene extends Phaser.Scene {
       return;
     }
     this.transitioning = true;
+    this.gems.onLeaveCave();
     gameState.saveNow();
     this.scene.start('TownScene');
   }
 
   private onPlayerDown(): void {
     this.transitioning = true;
+    this.gems.onLeaveCave();
     gameState.heal(Math.floor(gameState.player.maxHp * 0.5));
     gameState.saveNow();
     this.floatText(this.player.x, this.player.y, 'Knocked out — returning…', '#fca5a5');

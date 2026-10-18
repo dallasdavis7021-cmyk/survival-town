@@ -64,17 +64,22 @@ export class PlacementManager {
   private feedbackUntil = 0;
   private feedbackMessage = '';
   private onChanged?: () => void;
+  private canBuildAt?: (gridX: number, gridY: number) => boolean;
   private cursorGrid = { x: 0, y: 0 };
   private boundPointerDown: (pointer: Phaser.Input.Pointer) => void;
 
   constructor(
     scene: Phaser.Scene,
     structuresLayer: Phaser.GameObjects.Group,
-    onChanged?: () => void,
+    options?: {
+      onChanged?: () => void;
+      canBuildAt?: (gridX: number, gridY: number) => boolean;
+    },
   ) {
     this.scene = scene;
     this.structuresLayer = structuresLayer;
-    this.onChanged = onChanged;
+    this.onChanged = options?.onChanged;
+    this.canBuildAt = options?.canBuildAt;
 
     this.ghostCell = scene.add
       .image(0, 0, 'grid-cell')
@@ -225,10 +230,16 @@ export class PlacementManager {
     this.ghost.setTexture(this.selected).setVisible(true);
     const key = cellKey(gridX, gridY);
     const occupied = this.occupied.has(key);
+    const inSafe = !this.canBuildAt || this.canBuildAt(gridX, gridY);
     const afford = gameState.canAfford(BUILD_COSTS[this.selected]);
-    const canPlace = !occupied && afford;
+    const canPlace = !occupied && afford && inSafe;
 
-    if (canPlace) {
+    if (!inSafe) {
+      this.ghost.setTint(0xef4444).setAlpha(0.35);
+      this.ghostCell.setTint(0xef4444);
+      this.statusText.setText('Wilderness — building only in town safe zone');
+      this.statusText.setStyle({ color: '#fecaca', backgroundColor: '#7f1d1dcc' });
+    } else if (canPlace) {
       this.ghost.setTint(0xffffff).setAlpha(0.6);
       this.ghostCell.setTint(0x4ade80);
       this.statusText.setText(`${BUILD_LABELS[this.selected]} — RMB place · LMB/R remove`);
@@ -287,6 +298,11 @@ export class PlacementManager {
   }
 
   private tryPlace(gridX: number, gridY: number): void {
+    if (this.canBuildAt && !this.canBuildAt(gridX, gridY)) {
+      this.flashFeedback('Build only inside the town safe zone', '#fecaca');
+      return;
+    }
+
     const key = cellKey(gridX, gridY);
     if (this.occupied.has(key)) {
       this.flashFeedback('Tile occupied — LMB to remove', '#fecaca');
