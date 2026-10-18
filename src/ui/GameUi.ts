@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import { CAVE_COLS, CAVE_ROWS, CAVE_TILE, type ParsedCaveMap } from '../maps/caveLayout';
 import { gameState, type InventoryItemId } from '../state/GameState';
 import { GRID_SIZE } from '../systems/PlacementManager';
-import { SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
+import { CAVE_ENTRANCE_GRID, SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
 
 export type UiPanel = 'map' | 'inventory' | 'settings' | null;
 export type UiArea = 'town' | 'cave';
@@ -134,8 +134,7 @@ export class GameUi {
       /* swallow clicks while modal open */
     });
 
-    const pw = Math.min(520, w - 48);
-    const ph = Math.min(400, h - 48);
+    const { pw, ph } = this.panelSize();
     this.panelBg = this.scene.add
       .rectangle(w / 2, h / 2, pw, ph, 0x0f1f14, 0.96)
       .setStrokeStyle(2, 0x4ade80, 0.7);
@@ -222,6 +221,7 @@ export class GameUi {
     this.mapGfx.clear().setVisible(false);
     this.playerBlip.setVisible(false);
     this.body.setVisible(true);
+    this.layoutPanel(panel);
 
     if (panel === 'map') {
       this.title.setText(this.ctx.area === 'cave' ? 'MAP — Cave (fog of war)' : 'MAP — Overworld');
@@ -236,6 +236,30 @@ export class GameUi {
       this.title.setText('SETTINGS');
       this.showSettingsMenu();
     }
+  }
+
+  /** Near-fullscreen map for overworld; larger cave map; compact for inventory/settings. */
+  private panelSize(forMap = false): { pw: number; ph: number } {
+    const w = this.scene.scale.width;
+    const h = this.scene.scale.height;
+    const mapOpen = forMap || this.active === 'map';
+    if (mapOpen && this.ctx.area === 'town') {
+      return { pw: Math.min(w - 16, w * 0.96), ph: Math.min(h - 16, h * 0.94) };
+    }
+    if (mapOpen && this.ctx.area === 'cave') {
+      return { pw: Math.min(w - 24, 720), ph: Math.min(h - 24, 560) };
+    }
+    return { pw: Math.min(560, w - 48), ph: Math.min(420, h - 48) };
+  }
+
+  private layoutPanel(panel: UiPanel): void {
+    const w = this.scene.scale.width;
+    const h = this.scene.scale.height;
+    const { pw, ph } = this.panelSize(panel === 'map');
+    this.panelBg.setPosition(w / 2, h / 2).setSize(pw, ph);
+    this.title.setPosition(w / 2, h / 2 - ph / 2 + 22);
+    this.body.setPosition(w / 2 - pw / 2 + 20, h / 2 - ph / 2 + 48);
+    this.body.setStyle({ wordWrap: { width: pw - 40 } });
   }
 
   private close(): void {
@@ -258,7 +282,7 @@ export class GameUi {
 
     const w = this.scene.scale.width;
     const h = this.scene.scale.height;
-    const ph = Math.min(400, h - 48);
+    const { ph } = this.panelSize(false);
     const baseY = h / 2 - ph / 2 + 90;
 
     const mk = (label: string, y: number, onClick: () => void) => {
@@ -340,15 +364,15 @@ export class GameUi {
   private mapFrame(): { ox: number; oy: number; cell: number; cols: number; rows: number } {
     const w = this.scene.scale.width;
     const h = this.scene.scale.height;
-    const pw = Math.min(520, w - 48);
-    const ph = Math.min(400, h - 48);
+    const { pw, ph } = this.panelSize(true);
     const cols = this.ctx.area === 'cave' ? CAVE_COLS : WORLD_COLS;
     const rows = this.ctx.area === 'cave' ? CAVE_ROWS : WORLD_ROWS;
-    const padX = 28;
-    const padTop = 52;
-    const padBot = 24;
+    const padX = 20;
+    const padTop = 48;
+    const padBot = 20;
     const availW = pw - padX * 2;
     const availH = ph - padTop - padBot;
+    // Prefer filling the panel — world grid scales up for readable village map
     const cell = Math.min(availW / cols, availH / rows);
     const mapW = cell * cols;
     const mapH = cell * rows;
@@ -380,9 +404,9 @@ export class GameUi {
       (safe.y1 - safe.y0 + 1) * cell,
     );
 
-    // Cave portal (north center of safe)
-    const portalGx = (safe.x0 + safe.x1) / 2;
-    const portalGy = safe.y0;
+    // Cave portal (wilderness — not on safe border)
+    const portalGx = CAVE_ENTRANCE_GRID.gx;
+    const portalGy = CAVE_ENTRANCE_GRID.gy;
     this.mapGfx.fillStyle(0x1e293b, 1);
     this.mapGfx.fillRect(
       ox + portalGx * cell - cell * 0.4,
@@ -391,7 +415,11 @@ export class GameUi {
       cell * 1.2,
     );
     this.mapGfx.fillStyle(0x38bdf8, 1);
-    this.mapGfx.fillCircle(ox + portalGx * cell + cell * 0.5, oy + portalGy * cell + cell * 0.4, cell * 0.45);
+    this.mapGfx.fillCircle(
+      ox + portalGx * cell + cell * 0.5,
+      oy + portalGy * cell + cell * 0.4,
+      cell * 0.45,
+    );
 
     // Structures
     for (const s of gameState.structures) {

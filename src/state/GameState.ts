@@ -57,7 +57,8 @@ const DEFAULT_STATE: PersistedState = {
     hp: 100,
     maxHp: 100,
     attack: 12,
-    speed: 160,
+    /** Comfortable top-down pace (was 160). */
+    speed: 96,
   },
   inventory: {
     wood: 16,
@@ -267,11 +268,17 @@ export class GameState {
       }
       const typed = parsed as unknown as Partial<PersistedState>;
 
+      const mergedPlayer = { ...cloneDefault().player, ...typed.player };
+      // Re-tune playtest pace: clamp legacy saves that still use the old 160 speed
+      if (mergedPlayer.speed > 110 || mergedPlayer.speed < 60) {
+        mergedPlayer.speed = cloneDefault().player.speed;
+      }
+
       return {
         ...cloneDefault(),
         ...typed,
         version: 2,
-        player: { ...cloneDefault().player, ...typed.player },
+        player: mergedPlayer,
         inventory: { ...cloneDefault().inventory, ...typed.inventory },
         structures: Array.isArray(typed.structures) ? typed.structures : [],
         pendingCaveGems: Array.isArray(typed.pendingCaveGems) ? typed.pendingCaveGems : [],

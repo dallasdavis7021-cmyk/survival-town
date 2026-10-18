@@ -18,6 +18,15 @@ export const SAFE_ZONE: SafeZone = {
   y1: 27,
 };
 
+/**
+ * Overworld cave entrance — deep wilderness north of the village,
+ * not on the safe-zone border (so exploration can lead you to it).
+ */
+export const CAVE_ENTRANCE_GRID = {
+  gx: 24,
+  gy: 2,
+} as const;
+
 export function isSafeGrid(gx: number, gy: number, safe: SafeZone = SAFE_ZONE): boolean {
   return gx >= safe.x0 && gx <= safe.x1 && gy >= safe.y0 && gy <= safe.y1;
 }

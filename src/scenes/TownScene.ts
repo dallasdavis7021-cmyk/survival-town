@@ -24,7 +24,13 @@ import { ensurePortalAssetsLoaded, placePortal } from '../systems/PortalAssets';
 import { WildernessMetalSpawner } from '../systems/WildernessMetalSpawner';
 import { GameUi } from '../ui/GameUi';
 import { ensureShapeTextures } from '../utils/textures';
-import { isSafeGrid, SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
+import {
+  CAVE_ENTRANCE_GRID,
+  isSafeGrid,
+  SAFE_ZONE,
+  WORLD_COLS,
+  WORLD_ROWS,
+} from '../world/Biomes';
 
 const MAP_W = WORLD_COLS * GRID_SIZE;
 const MAP_H = WORLD_ROWS * GRID_SIZE;
@@ -122,15 +128,16 @@ export class TownScene extends Phaser.Scene {
       .setOrigin(1, 0);
 
     this.player = createPlayerSprite(this, safeCx, safeCy + 40);
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    // Slower camera follow for a calmer top-down feel
+    this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
 
-    const gateX = safeCx;
-    const gateY = SAFE.y0 * GRID_SIZE + GRID_SIZE * 0.6;
-    // Placeholder until portal art loads; swapped in ensurePortalAssetsLoaded
+    const gateX = CAVE_ENTRANCE_GRID.gx * GRID_SIZE + GRID_SIZE / 2;
+    const gateY = CAVE_ENTRANCE_GRID.gy * GRID_SIZE + GRID_SIZE * 0.7;
+    // Wilderness cave mouth — walk north from the village to find it
     placePortal(this, gateX, gateY, 'entrance', () => this.enterCave(), this.player);
 
     this.add
-      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 3.2, 'TOWN SAFE ZONE', {
+      .text(safeCx, SAFE.y0 * GRID_SIZE + GRID_SIZE * 1.4, 'TOWN SAFE ZONE', {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: '11px',
         color: '#bbf7d0',

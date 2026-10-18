@@ -104,7 +104,7 @@ export class CaveScene extends Phaser.Scene {
 
     this.player = createPlayerSprite(this, this.map.spawn.x, this.map.spawn.y);
     this.physics.add.collider(this.player, this.walls);
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
 
     this.hostiles = this.physics.add.group();
     this.oreNodes = this.physics.add.staticGroup();
@@ -146,6 +146,8 @@ export class CaveScene extends Phaser.Scene {
         const h = child as HostileSprite;
         if (h.active && this.textures.exists('cave-creature-sheet')) {
           styleCaveCreature(h, h.config.tier);
+          // Re-assert depth after restyle so fog erase reveals them in the lit radius
+          h.setDepth(55).setAlpha(1).setVisible(true);
         }
         return true;
       });

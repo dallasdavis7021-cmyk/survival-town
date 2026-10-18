@@ -80,7 +80,7 @@ export function pickTreeSize(rng: () => number = Math.random): TreeSize {
 
 /** Display heights for top-down (source art is large). */
 export const TREE_DISPLAY_HEIGHT: Record<TreeSize, number> = {
-  l: 72,
-  m: 56,
-  s: 40,
+  l: 64,
+  m: 52,
+  s: 38,
 };

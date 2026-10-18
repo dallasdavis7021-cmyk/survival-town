@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
-import { CAVE_TILE, type CaveRoom } from '../maps/caveLayout';
+import type { CaveRoom } from '../maps/caveLayout';
 import { gameState } from '../state/GameState';
 import {
-  constrainToWalkable,
+  constrainToRoom,
   facingFromVelocity,
   findRoomAt,
+  isInsideRoom,
   pickRoomPatrolTarget,
   styleCaveCreature,
   updateCreatureAnim,
@@ -80,7 +81,6 @@ export class CombatSystem {
   private onPlayerHurt?: () => void;
   private readonly attackReach = 46;
   private readonly attackHalfWidth = 38;
-  private walkable: boolean[][] | null = null;
   private rooms: CaveRoom[] = [];
 
   constructor(
@@ -90,6 +90,7 @@ export class CombatSystem {
     options?: {
       onHostileKilled?: (hostile: HostileSprite, x: number, y: number) => void;
       onPlayerHurt?: () => void;
+      /** Kept for call-site compat; room tiles alone gate movement now. */
       walkable?: boolean[][];
       rooms?: CaveRoom[];
     },
@@ -99,12 +100,10 @@ export class CombatSystem {
     this.hostiles = hostiles;
     this.onHostileKilled = options?.onHostileKilled;
     this.onPlayerHurt = options?.onPlayerHurt;
-    this.walkable = options?.walkable ?? null;
     this.rooms = options?.rooms ?? [];
   }
 
-  setCaveNav(walkable: boolean[][], rooms: CaveRoom[]): void {
-    this.walkable = walkable;
+  setCaveNav(_walkable: boolean[][], rooms: CaveRoom[]): void {
     this.rooms = rooms;
   }
 
@@ -162,7 +161,17 @@ export class CombatSystem {
     sprite.attackingUntil = 0;
     sprite.setData('isHostile', true);
     sprite.setData('tier', merged.tier);
+    sprite.setDepth(55);
+    sprite.setAlpha(1);
+    sprite.setVisible(true);
     return sprite;
+  }
+
+  /** Keep hostiles on their home-room tiles only (never corridors). */
+  private clampHostileToRoom(hostile: HostileSprite): void {
+    if (hostile.homeRoom) {
+      constrainToRoom(hostile, hostile.homeRoom);
+    }
   }
 
   update(time: number, delta: number): void {
@@ -327,9 +336,7 @@ export class CombatSystem {
     }
 
     if (time < hostile.stunUntil) {
-      if (this.walkable) {
-        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
-      }
+      this.clampHostileToRoom(hostile);
       return;
     }
 
@@ -340,7 +347,10 @@ export class CombatSystem {
       this.player.y,
     );
 
-    const inAggro = dist <= hostile.config.aggroRange;
+    // Only aggro / chase while the player is inside this creature's room
+    const playerInHome =
+      !!hostile.homeRoom && isInsideRoom(hostile.homeRoom, this.player.x, this.player.y);
+    const inAggro = playerInHome && dist <= hostile.config.aggroRange;
     if (inAggro && !hostile.aggroed) {
       hostile.aggroed = true;
       this.scene.tweens.add({
@@ -349,7 +359,7 @@ export class CombatSystem {
         duration: 90,
         yoyo: true,
       });
-    } else if (!inAggro && hostile.aggroed && dist > hostile.config.aggroRange * 1.35) {
+    } else if (hostile.aggroed && (!playerInHome || dist > hostile.config.aggroRange * 1.35)) {
       hostile.aggroed = false;
       hostile.patrolTarget = hostile.homeRoom ? pickRoomPatrolTarget(hostile.homeRoom) : null;
     }
@@ -357,9 +367,7 @@ export class CombatSystem {
     if (time < hostile.attackingUntil) {
       body.setVelocity(0, 0);
       updateCreatureAnim(hostile, hostile.facingDir, false, 'attack');
-      if (this.walkable) {
-        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
-      }
+      this.clampHostileToRoom(hostile);
       return;
     }
 
@@ -367,12 +375,10 @@ export class CombatSystem {
       this.patrolHostile(hostile);
     } else {
       this.scene.physics.moveToObject(hostile, this.player, hostile.config.speed);
-      // Keep chase roughly on walkables (walls already collide; also soft-clamp)
-      if (this.walkable) {
-        constrainToWalkable(hostile, this.walkable, CAVE_TILE);
-      }
+      this.clampHostileToRoom(hostile);
 
       if (
+        playerInHome &&
         dist <= hostile.config.attackRange &&
         time - hostile.lastAttackAt >= hostile.config.attackCooldownMs &&
         time >= this.playerStunUntil
@@ -410,9 +416,7 @@ export class CombatSystem {
     }
     updateCreatureAnim(hostile, hostile.facingDir, moving, 'loco');
 
-    if (this.walkable) {
-      constrainToWalkable(hostile, this.walkable, CAVE_TILE);
-    }
+    this.clampHostileToRoom(hostile);
   }
 
   private patrolHostile(hostile: HostileSprite): void {
