@@ -104,7 +104,7 @@ export class CaveScene extends Phaser.Scene {
 
     this.player = createPlayerSprite(this, this.map.spawn.x, this.map.spawn.y);
     this.physics.add.collider(this.player, this.walls);
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
+    this.cameras.main.startFollow(this.player, true, 0.06, 0.06);
 
     this.hostiles = this.physics.add.group();
     this.oreNodes = this.physics.add.staticGroup();
@@ -146,6 +146,8 @@ export class CaveScene extends Phaser.Scene {
         const h = child as HostileSprite;
         if (h.active && this.textures.exists('cave-creature-sheet')) {
           styleCaveCreature(h, h.config.tier);
+          // Re-assert depth after restyle so fog erase reveals them in the lit radius
+          h.setDepth(55).setAlpha(1).setVisible(true);
         }
         return true;
       });
@@ -514,9 +516,13 @@ export class CaveScene extends Phaser.Scene {
 
   private onHostileKilled(hostile: HostileSprite, x: number, y: number): void {
     const tier = hostile.config.tier;
-    const drops: { id: InventoryItemId; n: number }[] = [{ id: 'scrap', n: tier }];
+    // Hostile salvage → ore (scrap removed; was redundant prototype currency)
+    const drops: { id: InventoryItemId; n: number }[] = [{ id: 'ore', n: tier }];
     if (Math.random() < 0.4 + tier * 0.1) {
       drops.push({ id: 'ore', n: tier === 3 ? 2 : 1 });
+    }
+    if (Math.random() < 0.3) {
+      drops.push({ id: 'stone', n: 1 });
     }
     if (tier >= 3 && Math.random() < 0.45) {
       drops.push({ id: 'crystal', n: 1 });
@@ -654,13 +660,13 @@ export class CaveScene extends Phaser.Scene {
       drops.push({ id: 'ore', n: 2 + Math.floor(Math.random() * 2) });
       drops.push({ id: 'stone', n: 1 });
       if (Math.random() < 0.25) {
-        drops.push({ id: 'scrap', n: 1 });
+        drops.push({ id: 'ore', n: 1 });
       }
     } else {
       drops.push({ id: 'ore', n: 2 + Math.floor(Math.random() * 2) });
       drops.push({ id: 'crystal', n: 1 });
       if (Math.random() < 0.5) {
-        drops.push({ id: 'scrap', n: 2 });
+        drops.push({ id: 'ore', n: 2 });
       }
     }
 
@@ -710,7 +716,7 @@ export class CaveScene extends Phaser.Scene {
       [
         `CAVE TIER ${this.currentTier} — ${tierName}  ·  light ${this.lightRadius}px`,
         `HP ${gameState.player.hp}/${gameState.player.maxHp}  ·  Active: ${TOOL_LABELS[this.tool]}${this.tool === 'weapon' ? ` (${swing})` : ''}`,
-        `Inv: ore ${inv.ore} scrap ${inv.scrap}  gems ${inv.diamond}d/${inv.emerald}e/${inv.sapphire}s  metals ${inv.gold}g/${inv.iron}i/${inv.silver}s`,
+        `Inv: ore ${inv.ore}  gems ${inv.diamond}d/${inv.emerald}e/${inv.sapphire}s  metals ${inv.gold}g/${inv.iron}i/${inv.silver}s`,
         `Picked up this run: ${runBits || '—'}  ·  gems in rooms  ·  path → RETURN TO TOWN`,
       ].join('\n'),
     );

@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import {
+  CAVE_ENTRANCE_GRID,
   isSafeGrid,
   nearSafeFringe,
   SAFE_ZONE,
@@ -38,9 +39,10 @@ function placeTree(
   }
   const img = scene.add.image(x, y, key);
   const targetH = TREE_DISPLAY_HEIGHT[size];
-  const scale = targetH / img.height;
+  // Fit by height; never crop — full canopy + trunk must show
+  const scale = targetH / Math.max(1, img.height);
   img.setScale(scale);
-  img.setOrigin(0.5, 0.85);
+  img.setOrigin(0.5, 1); // plant at feet
   img.setDepth(8 + y * 0.01);
 }
 
@@ -98,9 +100,11 @@ function paintGrassTile(
  * Village fringe slightly denser than open wilderness; town center clear.
  */
 function placeSparseTrees(scene: Phaser.Scene, safe: SafeZone, rng: () => number): void {
-  const gateGx = Math.floor((safe.x0 + safe.x1) / 2);
+  const gateGx = CAVE_ENTRANCE_GRID.gx;
+  const gateGy = CAVE_ENTRANCE_GRID.gy;
   let placed = 0;
-  const maxTrees = 48; // whole map — leave lots of open ground
+  // Scale with world area (~4× vs old 48×36) — sparse but not empty void
+  const maxTrees = Math.floor((WORLD_COLS * WORLD_ROWS) / 40); // ~172 on 96×72
 
   for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
     for (let gx = 0; gx < WORLD_COLS; gx += 1) {
@@ -113,14 +117,17 @@ function placeSparseTrees(scene: Phaser.Scene, safe: SafeZone, rng: () => number
         continue;
       }
 
-      // Clear cave approach
-      if (Math.abs(gx - gateGx) <= 2 && gy <= safe.y0 + 1) {
+      // Clear around wilderness cave mouth + a short approach lane toward town
+      if (Math.abs(gx - gateGx) <= 2 && Math.abs(gy - gateGy) <= 2) {
+        continue;
+      }
+      if (Math.abs(gx - gateGx) <= 1 && gy > gateGy && gy < safe.y0) {
         continue;
       }
 
       const onFringe = nearSafeFringe(gx, gy, safe, 1);
-      // ~4–6% fringe, ~2% wilderness — much lower than multi-biome pass
-      const chance = onFringe ? 0.055 : 0.018;
+      // ~5% fringe, ~1.6% wilderness — light cover across the larger map
+      const chance = onFringe ? 0.05 : 0.016;
       if (rng() > chance) {
         continue;
       }

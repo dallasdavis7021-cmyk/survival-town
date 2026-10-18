@@ -12,7 +12,6 @@ const LOOT_TINT: Record<InventoryItemId, number> = {
   wood: 0xb45309,
   stone: 0x94a3b8,
   ore: 0x38bdf8,
-  scrap: 0xfbbf24,
   crystal: 0xc084fc,
   diamond: 0xe0f2fe,
   emerald: 0x4ade80,

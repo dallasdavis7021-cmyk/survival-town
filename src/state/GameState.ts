@@ -1,10 +1,10 @@
 import { CAVE_COLS, CAVE_ROWS } from '../maps/caveLayout';
+import { WORLD_COLS, WORLD_PAD_FROM_V2, WORLD_ROWS } from '../world/Biomes';
 
 export type InventoryItemId =
   | 'wood'
   | 'stone'
   | 'ore'
-  | 'scrap'
   | 'crystal'
   | 'diamond'
   | 'emerald'
@@ -39,7 +39,8 @@ export interface PlayerStats {
 }
 
 export interface PersistedState {
-  version: 2;
+  /** v3: larger overworld pad + scrap removed (folded into ore). */
+  version: 3;
   player: PlayerStats;
   inventory: Record<InventoryItemId, number>;
   structures: PlacedStructure[];
@@ -52,18 +53,18 @@ export interface PersistedState {
 const STORAGE_KEY = 'survival-town-save-v1';
 
 const DEFAULT_STATE: PersistedState = {
-  version: 2,
+  version: 3,
   player: {
     hp: 100,
     maxHp: 100,
     attack: 12,
-    speed: 160,
+    /** Comfortable top-down pace (was 160). */
+    speed: 96,
   },
   inventory: {
     wood: 16,
     stone: 10,
-    ore: 2,
-    scrap: 2,
+    ore: 4,
     crystal: 0,
     diamond: 0,
     emerald: 0,
@@ -101,6 +102,57 @@ function normalizeCaveExplored(raw: unknown): string[] {
     rows.push(row);
   }
   return rows;
+}
+
+/** Fold legacy `scrap` into ore; drop unknown keys. */
+function normalizeInventory(raw: unknown): Record<InventoryItemId, number> {
+  const base = cloneDefault().inventory;
+  if (!raw || typeof raw !== 'object') {
+    return base;
+  }
+  const src = raw as Record<string, unknown>;
+  for (const key of Object.keys(base) as InventoryItemId[]) {
+    const n = Number(src[key]);
+    if (Number.isFinite(n) && n >= 0) {
+      base[key] = Math.floor(n);
+    }
+  }
+  // scrap was combat/ore salvage — merge into ore so players keep value
+  const scrap = Number(src.scrap);
+  if (Number.isFinite(scrap) && scrap > 0) {
+    base.ore += Math.floor(scrap);
+  }
+  return base;
+}
+
+function normalizeStructures(raw: unknown, fromLegacyWorld: boolean): PlacedStructure[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const padX = fromLegacyWorld ? WORLD_PAD_FROM_V2.x : 0;
+  const padY = fromLegacyWorld ? WORLD_PAD_FROM_V2.y : 0;
+  const out: PlacedStructure[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const s = item as Partial<PlacedStructure>;
+    const gridX = Math.floor(Number(s.gridX)) + padX;
+    const gridY = Math.floor(Number(s.gridY)) + padY;
+    if (!s.id || !s.kind || !Number.isFinite(gridX) || !Number.isFinite(gridY)) {
+      continue;
+    }
+    if (gridX < 0 || gridY < 0 || gridX >= WORLD_COLS || gridY >= WORLD_ROWS) {
+      continue;
+    }
+    out.push({
+      id: String(s.id),
+      kind: s.kind,
+      gridX,
+      gridY,
+    });
+  }
+  return out;
 }
 
 export class GameState {
@@ -262,18 +314,27 @@ export class GameState {
 
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const ver = Number(parsed.version);
-      if (ver !== 1 && ver !== 2) {
+      if (ver !== 1 && ver !== 2 && ver !== 3) {
         return null;
       }
-      const typed = parsed as unknown as Partial<PersistedState>;
+      const typed = parsed as unknown as Partial<PersistedState> & {
+        inventory?: Record<string, unknown>;
+      };
+      const fromLegacyWorld = ver < 3;
+
+      const mergedPlayer = { ...cloneDefault().player, ...typed.player };
+      // Re-tune playtest pace: clamp legacy saves that still use the old 160 speed
+      if (mergedPlayer.speed > 110 || mergedPlayer.speed < 60) {
+        mergedPlayer.speed = cloneDefault().player.speed;
+      }
 
       return {
         ...cloneDefault(),
         ...typed,
-        version: 2,
-        player: { ...cloneDefault().player, ...typed.player },
-        inventory: { ...cloneDefault().inventory, ...typed.inventory },
-        structures: Array.isArray(typed.structures) ? typed.structures : [],
+        version: 3,
+        player: mergedPlayer,
+        inventory: normalizeInventory(typed.inventory),
+        structures: normalizeStructures(typed.structures, fromLegacyWorld),
         pendingCaveGems: Array.isArray(typed.pendingCaveGems) ? typed.pendingCaveGems : [],
         caveExplored: normalizeCaveExplored(typed.caveExplored),
       };

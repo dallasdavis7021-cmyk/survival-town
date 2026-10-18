@@ -4,7 +4,13 @@ import { CREATURE_ATLAS } from './creatureAtlasMeta';
 import type { FacingDir } from './PlayerSprite';
 
 export const CREATURE_TEXTURE = 'cave-creature-sheet';
-const DISPLAY_HEIGHT = 36;
+/** Tall enough to read at cave tile scale; still fits corridors/rooms. */
+const DISPLAY_HEIGHT = 44;
+/**
+ * Above fog RT (depth 50) so hostiles stay visible in the lit/camera area.
+ * Floors/ore sit far below; HUD/UI stay above (~100).
+ */
+export const CREATURE_DEPTH = 55;
 
 /**
  * Room size for spawn counts (bounding-box tile area).
@@ -135,12 +141,68 @@ export function styleCaveCreature(sprite: Phaser.Physics.Arcade.Sprite, tier: 1 
   sprite.setTexture(CREATURE_TEXTURE, 0);
   sprite.setScale(scale);
   sprite.setOrigin(0.5, 0.8);
+  sprite.setDepth(CREATURE_DEPTH);
+  sprite.setAlpha(1);
+  sprite.setVisible(true);
   sprite.clearTint();
   const body = sprite.body as Phaser.Physics.Arcade.Body;
   body.setSize(18, 14);
   body.setOffset((CREATURE_ATLAS.frameWidth - 18) / 2, CREATURE_ATLAS.frameHeight - 16);
   if (sprite.anims.animationManager.exists('creature-idle-down')) {
     sprite.play('creature-idle-down');
+  }
+}
+
+/** True if a world point sits on a tile belonging to the room (not corridor). */
+export function isInsideRoom(room: CaveRoom, worldX: number, worldY: number): boolean {
+  const tx = Math.floor(worldX / CAVE_TILE);
+  const ty = Math.floor(worldY / CAVE_TILE);
+  return room.tiles.some((t) => t.tx === tx && t.ty === ty);
+}
+
+/**
+ * Soft-clamp velocity / position so the sprite stays on home-room walkables only
+ * (never corridors / walkways).
+ */
+export function constrainToRoom(
+  sprite: Phaser.Physics.Arcade.Sprite,
+  room: CaveRoom,
+): void {
+  const body = sprite.body as Phaser.Physics.Arcade.Body | undefined;
+  if (!body) {
+    return;
+  }
+  const tileSet = new Set(room.tiles.map((t) => `${t.tx},${t.ty}`));
+  const tileOk = (wx: number, wy: number) => {
+    const tx = Math.floor(wx / CAVE_TILE);
+    const ty = Math.floor(wy / CAVE_TILE);
+    return tileSet.has(`${tx},${ty}`);
+  };
+
+  const tryX = sprite.x + body.velocity.x * (1 / 60);
+  const tryY = sprite.y + body.velocity.y * (1 / 60);
+  if (!tileOk(tryX, sprite.y)) {
+    body.setVelocityX(0);
+  }
+  if (!tileOk(sprite.x, tryY)) {
+    body.setVelocityY(0);
+  }
+
+  if (!tileOk(sprite.x, sprite.y)) {
+    // Snap back to nearest room tile
+    let best = room.tiles[0];
+    let bestD = Infinity;
+    for (const t of room.tiles) {
+      const d = Phaser.Math.Distance.Between(sprite.x, sprite.y, t.x, t.y);
+      if (d < bestD) {
+        bestD = d;
+        best = t;
+      }
+    }
+    if (best) {
+      sprite.setPosition(best.x, best.y);
+      body.setVelocity(0, 0);
+    }
   }
 }
 
@@ -189,7 +251,7 @@ export function updateCreatureAnim(
   }
 }
 
-/** Find the cave room containing a world point (or nearest by tile). */
+/** Find the cave room containing a world point (room tiles only — not corridors). */
 export function findRoomAt(
   rooms: CaveRoom[],
   worldX: number,
@@ -198,11 +260,11 @@ export function findRoomAt(
   const tx = Math.floor(worldX / CAVE_TILE);
   const ty = Math.floor(worldY / CAVE_TILE);
   for (const room of rooms) {
-    if (tx >= room.x0 && tx <= room.x1 && ty >= room.y0 && ty <= room.y1) {
+    if (room.tiles.some((t) => t.tx === tx && t.ty === ty)) {
       return room;
     }
   }
-  // nearest room by center distance
+  // Nearest room center (for edge cases); caller should still clamp to room tiles
   let best: CaveRoom | null = null;
   let bestD = Infinity;
   for (const room of rooms) {
