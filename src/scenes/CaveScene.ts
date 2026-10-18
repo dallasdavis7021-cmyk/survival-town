@@ -21,6 +21,7 @@ import {
   type ToolId,
 } from '../systems/PlayerTools';
 import { ensurePortalAssetsLoaded, placePortal } from '../systems/PortalAssets';
+import { GameUi } from '../ui/GameUi';
 import { ensureShapeTextures } from '../utils/textures';
 
 const MINE_RANGE = 56;
@@ -62,6 +63,7 @@ export class CaveScene extends Phaser.Scene {
   private transitioning = false;
   private runLoot: Partial<Record<InventoryItemId, number>> = {};
   private facing = new Phaser.Math.Vector2(0, -1);
+  private ui!: GameUi;
 
   constructor() {
     super('CaveScene');
@@ -185,7 +187,7 @@ export class CaveScene extends Phaser.Scene {
     this.pickupKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (!pointer.rightButtonDown() || this.transitioning) {
+      if (!pointer.rightButtonDown() || this.transitioning || this.ui?.isOpen) {
         return;
       }
       this.onRightClick(pointer);
@@ -194,6 +196,14 @@ export class CaveScene extends Phaser.Scene {
     this.scale.on('resize', (gameSize: Phaser.Structs.Size) => {
       this.fogRt.setSize(gameSize.width, gameSize.height);
     });
+
+    this.ui = new GameUi(this, {
+      area: 'cave',
+      getPlayerWorld: () => ({ x: this.player.x, y: this.player.y }),
+      caveMap: this.map,
+    });
+    // Seed FoW at spawn immediately
+    this.ui.revealCaveFog();
 
     this.currentTier = tierAtWorldY(this.player.y, this.map.height);
     this.applyTierLight();
@@ -207,6 +217,15 @@ export class CaveScene extends Phaser.Scene {
 
     if (gameState.player.hp <= 0) {
       this.onPlayerDown();
+      return;
+    }
+
+    this.ui.revealCaveFog();
+    this.ui.update();
+    if (this.ui.isOpen) {
+      this.player.setVelocity(0, 0);
+      this.drawFog();
+      this.refreshHud();
       return;
     }
 
