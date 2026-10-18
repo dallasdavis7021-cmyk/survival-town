@@ -6,6 +6,77 @@ import type { FacingDir } from './PlayerSprite';
 export const CREATURE_TEXTURE = 'cave-creature-sheet';
 const DISPLAY_HEIGHT = 36;
 
+/**
+ * Room size for spawn counts (bounding-box tile area).
+ * Small: area < SMALL_ROOM_AREA → 1 creature
+ * Big:   area ≥ SMALL_ROOM_AREA → 2 creatures
+ */
+export const SMALL_ROOM_AREA = 70;
+
+export function roomBoundingArea(room: CaveRoom): number {
+  return (room.x1 - room.x0 + 1) * (room.y1 - room.y0 + 1);
+}
+
+export function creatureCountForRoom(room: CaveRoom): 1 | 2 {
+  return roomBoundingArea(room) < SMALL_ROOM_AREA ? 1 : 2;
+}
+
+/** Pick distinct walkable tiles inside a room for creature spawns. */
+export function pickRoomSpawnPoints(
+  room: CaveRoom,
+  count: number,
+): { x: number; y: number; tx: number; ty: number }[] {
+  const tiles = [...room.tiles];
+  if (tiles.length === 0) {
+    return [];
+  }
+  // Prefer interior tiles (not on room edge) when available
+  const interior = tiles.filter(
+    (t) => t.tx > room.x0 && t.tx < room.x1 && t.ty > room.y0 && t.ty < room.y1,
+  );
+  const pool = [...(interior.length >= count ? interior : tiles)];
+  const picks: { x: number; y: number; tx: number; ty: number }[] = [];
+  const used = new Set<string>();
+
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+
+  for (const t of pool) {
+    if (picks.length >= count) {
+      break;
+    }
+    const key = `${t.tx},${t.ty}`;
+    if (used.has(key)) {
+      continue;
+    }
+    // Keep spawns a bit apart in big rooms
+    const tooClose = picks.some(
+      (p) => Math.abs(p.tx - t.tx) + Math.abs(p.ty - t.ty) < 3,
+    );
+    if (tooClose && pool.length > count + 2) {
+      continue;
+    }
+    used.add(key);
+    picks.push({ x: t.x, y: t.y, tx: t.tx, ty: t.ty });
+  }
+
+  // Fallback if spacing was too strict
+  while (picks.length < count && picks.length < tiles.length) {
+    const t = tiles[picks.length % tiles.length];
+    const key = `${t.tx},${t.ty}`;
+    if (!used.has(key)) {
+      used.add(key);
+      picks.push({ x: t.x, y: t.y, tx: t.tx, ty: t.ty });
+    } else {
+      break;
+    }
+  }
+
+  return picks;
+}
+
 export function preloadCaveCreature(scene: Phaser.Scene): void {
   if (!scene.textures.exists(CREATURE_TEXTURE)) {
     scene.load.spritesheet(CREATURE_TEXTURE, '/assets/creature/creature-atlas.png', {

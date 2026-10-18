@@ -9,7 +9,12 @@ import {
 import { gameState, type InventoryItemId } from '../state/GameState';
 import { ensureBiomeAssetsLoaded } from '../systems/BiomeAssets';
 import { decorateCaveTrees } from '../systems/BiomeDecorator';
-import { ensureCaveCreatureLoaded, styleCaveCreature } from '../systems/CaveCreature';
+import {
+  creatureCountForRoom,
+  ensureCaveCreatureLoaded,
+  pickRoomSpawnPoints,
+  styleCaveCreature,
+} from '../systems/CaveCreature';
 import { CaveGemSpawner } from '../systems/CaveGemSpawner';
 import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
@@ -356,43 +361,67 @@ export class CaveScene extends Phaser.Scene {
     return group;
   }
 
+  /**
+   * Spawn creatures per room (not corridors):
+   * - small rooms (bbox area < 70): 1 creature
+   * - big rooms (bbox area ≥ 70): 2 creatures
+   * Fresh every CaveScene create — leaving to town and re-entering respawns all.
+   */
   private spawnFromMap(): void {
-    for (const h of this.map.hostiles) {
-      const cfg =
-        h.tier === 3
-          ? {
-              tier: 3 as const,
-              hp: 65,
-              damage: 15,
-              speed: 115,
-              aggroRange: 200,
-              attackRange: 36,
-              knockback: 400,
-              attackCooldownMs: 650,
-            }
-          : h.tier === 2
-            ? {
-                tier: 2 as const,
-                hp: 42,
-                damage: 11,
-                speed: 100,
-                aggroRange: 180,
-                knockback: 360,
-              }
-            : {
-                tier: 1 as const,
-                hp: 28,
-                damage: 7,
-                speed: 85,
-                aggroRange: 150,
-              };
-
-      this.combat.spawnHostile(h.point.x, h.point.y, cfg);
-    }
+    this.spawnCreaturesInRooms();
 
     for (const o of this.map.ores) {
       this.spawnOre(o.point.x, o.point.y, o.tier, o.kind);
     }
+  }
+
+  private spawnCreaturesInRooms(): void {
+    // Clear any leftovers (scene restart is usual; this makes leave→reenter explicit)
+    this.hostiles.clear(true, true);
+
+    for (const room of this.map.rooms) {
+      const count = creatureCountForRoom(room);
+      const points = pickRoomSpawnPoints(room, count);
+      const cy = ((room.y0 + room.y1) / 2) * CAVE_TILE;
+      const tier = tierAtWorldY(cy, this.map.height);
+      const cfg = this.hostileConfigForTier(tier);
+
+      for (const p of points) {
+        this.combat.spawnHostile(p.x, p.y, cfg);
+      }
+    }
+  }
+
+  private hostileConfigForTier(tier: 1 | 2 | 3) {
+    if (tier === 3) {
+      return {
+        tier: 3 as const,
+        hp: 65,
+        damage: 15,
+        speed: 115,
+        aggroRange: 200,
+        attackRange: 36,
+        knockback: 400,
+        attackCooldownMs: 650,
+      };
+    }
+    if (tier === 2) {
+      return {
+        tier: 2 as const,
+        hp: 42,
+        damage: 11,
+        speed: 100,
+        aggroRange: 180,
+        knockback: 360,
+      };
+    }
+    return {
+      tier: 1 as const,
+      hp: 28,
+      damage: 7,
+      speed: 85,
+      aggroRange: 150,
+    };
   }
 
   private addTierBanner(x: number, y: number, label: string, color: string): void {
@@ -715,6 +744,8 @@ export class CaveScene extends Phaser.Scene {
     }
     this.transitioning = true;
     this.gems.onLeaveCave();
+    // Leaving destroys this scene; next CaveScene create re-runs spawnCreaturesInRooms
+    // so creatures respawn fresh (1/2 per room) even if killed this run.
     gameState.saveNow();
     this.scene.start('TownScene');
   }
