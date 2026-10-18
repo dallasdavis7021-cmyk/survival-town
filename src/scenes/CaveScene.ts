@@ -14,6 +14,15 @@ import { CombatSystem, type HostileSprite } from '../systems/CombatSystem';
 import { LootDrops } from '../systems/LootDrops';
 import { ensureMineralTexturesLoaded } from '../systems/Minerals';
 import {
+  createPlayerSprite,
+  ensurePlayerSpriteLoaded,
+  facingFromFacingVec,
+  playPlayerAttack,
+  playPlayerHurt,
+  updatePlayerAnim,
+  type FacingDir,
+} from '../systems/PlayerSprite';
+import {
   cycleTool,
   getActiveTool,
   TOOL_LABELS,
@@ -63,6 +72,7 @@ export class CaveScene extends Phaser.Scene {
   private transitioning = false;
   private runLoot: Partial<Record<InventoryItemId, number>> = {};
   private facing = new Phaser.Math.Vector2(0, -1);
+  private facingDir: FacingDir = 'up';
   private ui!: GameUi;
 
   constructor() {
@@ -86,13 +96,7 @@ export class CaveScene extends Phaser.Scene {
     this.drawWalkwayMap();
     this.walls = this.buildWallCollision();
 
-    this.player = this.physics.add.sprite(this.map.spawn.x, this.map.spawn.y, 'player');
-    this.player.setCollideWorldBounds(true);
-    this.player.setDepth(10);
-    const playerBody = this.player.body as Phaser.Physics.Arcade.Body;
-    playerBody.setSize(18, 18);
-    playerBody.setOffset(2, 2);
-
+    this.player = createPlayerSprite(this, this.map.spawn.x, this.map.spawn.y);
     this.physics.add.collider(this.player, this.walls);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
@@ -107,7 +111,10 @@ export class CaveScene extends Phaser.Scene {
 
     this.combat = new CombatSystem(this, this.player, this.hostiles, {
       onHostileKilled: (hostile, x, y) => this.onHostileKilled(hostile, x, y),
-      onPlayerHurt: () => this.refreshHud(),
+      onPlayerHurt: () => {
+        playPlayerHurt(this.player);
+        this.refreshHud();
+      },
     });
 
     this.physics.add.collider(this.hostiles, this.walls);
@@ -117,6 +124,7 @@ export class CaveScene extends Phaser.Scene {
       ensureMineralTexturesLoaded(this),
       ensureBiomeAssetsLoaded(this),
       ensurePortalAssetsLoaded(this),
+      ensurePlayerSpriteLoaded(this),
     ]).then(() => {
       if (!this.sys.isActive()) {
         return;
@@ -224,6 +232,7 @@ export class CaveScene extends Phaser.Scene {
     this.ui.update();
     if (this.ui.isOpen) {
       this.player.setVelocity(0, 0);
+      updatePlayerAnim(this.player, this.facingDir, false);
       this.drawFog();
       this.refreshHud();
       return;
@@ -406,12 +415,15 @@ export class CaveScene extends Phaser.Scene {
 
   private onRightClick(pointer: Phaser.Input.Pointer): void {
     if (this.tool === 'weapon') {
-      this.combat.tryStartAttack(this.time.now);
+      if (this.combat.tryStartAttack(this.time.now)) {
+        playPlayerAttack(this.player, this.facingDir);
+      }
       return;
     }
 
     if (this.tool === 'mining') {
       const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+      playPlayerAttack(this.player, this.facingDir);
       this.tryMineAt(world.x, world.y);
       return;
     }
@@ -509,11 +521,14 @@ export class CaveScene extends Phaser.Scene {
       vy *= inv;
     }
 
-    if (vx !== 0 || vy !== 0) {
+    const moving = vx !== 0 || vy !== 0;
+    if (moving) {
       this.facing.set(vx, vy).normalize();
+      this.facingDir = facingFromFacingVec(this.facing);
     }
 
     this.player.setVelocity(vx * speed, vy * speed);
+    updatePlayerAnim(this.player, this.facingDir, moving && !this.combat.isAttackLocked);
   }
 
   private tryMineAt(cursorX: number, cursorY: number): void {

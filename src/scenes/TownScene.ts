@@ -6,6 +6,14 @@ import { LootDrops } from '../systems/LootDrops';
 import { ensureMineralTexturesLoaded } from '../systems/Minerals';
 import { GRID_SIZE, PlacementManager } from '../systems/PlacementManager';
 import {
+  createPlayerSprite,
+  ensurePlayerSpriteLoaded,
+  facingFromFacingVec,
+  playPlayerAttack,
+  updatePlayerAnim,
+  type FacingDir,
+} from '../systems/PlayerSprite';
+import {
   cycleTool,
   getActiveTool,
   TOOL_LABELS,
@@ -42,7 +50,8 @@ export class TownScene extends Phaser.Scene {
   private zoneLabel!: Phaser.GameObjects.Text;
   private tool: ToolId = getActiveTool();
   private transitioning = false;
-  private facing = new Phaser.Math.Vector2(0, -1);
+  private facing = new Phaser.Math.Vector2(0, 1);
+  private facingDir: FacingDir = 'down';
   private biomesReady = false;
   private ui!: GameUi;
 
@@ -112,10 +121,7 @@ export class TownScene extends Phaser.Scene {
       .setDepth(102)
       .setOrigin(1, 0);
 
-    this.player = this.physics.add.sprite(safeCx, safeCy + 40, 'player');
-    this.player.setCollideWorldBounds(true);
-    this.player.setDepth(10);
-
+    this.player = createPlayerSprite(this, safeCx, safeCy + 40);
     this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
 
     const gateX = safeCx;
@@ -155,6 +161,7 @@ export class TownScene extends Phaser.Scene {
       ensureBiomeAssetsLoaded(this),
       ensureMineralTexturesLoaded(this),
       ensurePortalAssetsLoaded(this),
+      ensurePlayerSpriteLoaded(this),
     ]).then(() => {
       if (!this.sys.isActive()) {
         return;
@@ -164,7 +171,6 @@ export class TownScene extends Phaser.Scene {
         this.biomesReady = true;
       }
       this.metals.populate();
-      // Refresh portal texture if it loaded after placeholder
       const portalKey = 'portal-cave-entrance';
       if (this.textures.exists(portalKey)) {
         this.children.list.forEach((obj) => {
@@ -195,6 +201,7 @@ export class TownScene extends Phaser.Scene {
     this.ui.update();
     if (this.ui.isOpen) {
       this.player.setVelocity(0, 0);
+      updatePlayerAnim(this.player, this.facingDir, false);
       this.placement.setActive(false);
       this.refreshHud();
       return;
@@ -256,6 +263,7 @@ export class TownScene extends Phaser.Scene {
     }
 
     if (this.tool === 'weapon') {
+      playPlayerAttack(this.player, this.facingDir);
       if (this.isInSafeZone(this.player.x, this.player.y)) {
         this.floatHint('No hostiles in town safe zone');
       } else {
@@ -264,7 +272,9 @@ export class TownScene extends Phaser.Scene {
       return;
     }
 
+    // Mining — swing pickaxe then try harvest
     const world = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+    playPlayerAttack(this.player, this.facingDir);
     if (this.metals.tryMineNear(world.x, world.y, this.player.x, this.player.y, MINE_RANGE)) {
       this.refreshHud();
       return;
@@ -301,11 +311,14 @@ export class TownScene extends Phaser.Scene {
       vy *= inv;
     }
 
-    if (vx !== 0 || vy !== 0) {
+    const moving = vx !== 0 || vy !== 0;
+    if (moving) {
       this.facing.set(vx, vy).normalize();
+      this.facingDir = facingFromFacingVec(this.facing);
     }
 
     this.player.setVelocity(vx * speed, vy * speed);
+    updatePlayerAnim(this.player, this.facingDir, moving);
   }
 
   private refreshHud(): void {
