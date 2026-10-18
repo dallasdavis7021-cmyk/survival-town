@@ -7,24 +7,35 @@ export interface SafeZone {
   y1: number;
 }
 
-/** Matches TownScene world size. */
-export const WORLD_COLS = 48;
-export const WORLD_ROWS = 36;
+/**
+ * Overworld tile grid (playable TownScene bounds).
+ * Was 48×36 (1536×1152px); expanded so village + wilderness feel large.
+ * Tile size = GRID_SIZE (32px) → 3072×2304px.
+ */
+export const WORLD_COLS = 96;
+export const WORLD_ROWS = 72;
 
+/**
+ * Offset applied when migrating v1/v2 saves (old 48×36 origin) into the padded world.
+ * Old content sat in the NW; we grew wilderness on all sides.
+ */
+export const WORLD_PAD_FROM_V2 = { x: 24, y: 18 } as const;
+
+/** Village buildable area — centered-ish with thick wilderness ring. */
 export const SAFE_ZONE: SafeZone = {
-  x0: 10,
-  y0: 8,
-  x1: 37,
-  y1: 27,
+  x0: 34, // was 10 + pad
+  y0: 26, // was 8 + pad
+  x1: 61, // was 37 + pad
+  y1: 45, // was 27 + pad
 };
 
 /**
- * Overworld cave entrance — deep wilderness north of the village,
- * not on the safe-zone border (so exploration can lead you to it).
+ * Overworld cave entrance — deep northern wilderness,
+ * well clear of the safe-zone border so exploring can lead you to it.
  */
 export const CAVE_ENTRANCE_GRID = {
-  gx: 24,
-  gy: 2,
+  gx: 48,
+  gy: 8,
 } as const;
 
 export function isSafeGrid(gx: number, gy: number, safe: SafeZone = SAFE_ZONE): boolean {

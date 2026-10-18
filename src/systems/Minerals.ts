@@ -35,7 +35,8 @@ export const MINERAL_DISPLAY_HEIGHT = 32;
 
 export const CAVE_GEM_SPAWN_CHANCE = 0.28; // per gem type on cave enter (low)
 export const CAVE_GEM_RESPAWN_ON_LEAVE_CHANCE = 0.32;
-export const WILDERNESS_TARGET_COUNT = 10; // higher frequency than cave gems
+/** Scales with the larger overworld — still sparse, not carpet-bombed. */
+export const WILDERNESS_TARGET_COUNT = 24;
 export const WILDERNESS_OFFSCREEN_MARGIN = 80;
 
 export function isCaveGem(id: string): id is CaveGemId {

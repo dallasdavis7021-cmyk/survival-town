@@ -18,7 +18,6 @@ const INV_ORDER: InventoryItemId[] = [
   'wood',
   'stone',
   'ore',
-  'scrap',
   'crystal',
   'diamond',
   'emerald',
@@ -238,17 +237,10 @@ export class GameUi {
     }
   }
 
-  /** Near-fullscreen map for overworld; larger cave map; compact for inventory/settings. */
-  private panelSize(forMap = false): { pw: number; ph: number } {
+  /** Reasonable overlay panel — world size is separate from this UI. */
+  private panelSize(_forMap = false): { pw: number; ph: number } {
     const w = this.scene.scale.width;
     const h = this.scene.scale.height;
-    const mapOpen = forMap || this.active === 'map';
-    if (mapOpen && this.ctx.area === 'town') {
-      return { pw: Math.min(w - 16, w * 0.96), ph: Math.min(h - 16, h * 0.94) };
-    }
-    if (mapOpen && this.ctx.area === 'cave') {
-      return { pw: Math.min(w - 24, 720), ph: Math.min(h - 24, 560) };
-    }
     return { pw: Math.min(560, w - 48), ph: Math.min(420, h - 48) };
   }
 

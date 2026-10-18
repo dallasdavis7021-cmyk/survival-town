@@ -103,7 +103,8 @@ function placeSparseTrees(scene: Phaser.Scene, safe: SafeZone, rng: () => number
   const gateGx = CAVE_ENTRANCE_GRID.gx;
   const gateGy = CAVE_ENTRANCE_GRID.gy;
   let placed = 0;
-  const maxTrees = 48; // whole map — leave lots of open ground
+  // Scale with world area (~4× vs old 48×36) — sparse but not empty void
+  const maxTrees = Math.floor((WORLD_COLS * WORLD_ROWS) / 40); // ~172 on 96×72
 
   for (let gy = 0; gy < WORLD_ROWS; gy += 1) {
     for (let gx = 0; gx < WORLD_COLS; gx += 1) {
@@ -125,8 +126,8 @@ function placeSparseTrees(scene: Phaser.Scene, safe: SafeZone, rng: () => number
       }
 
       const onFringe = nearSafeFringe(gx, gy, safe, 1);
-      // ~4–6% fringe, ~2% wilderness — much lower than multi-biome pass
-      const chance = onFringe ? 0.055 : 0.018;
+      // ~5% fringe, ~1.6% wilderness — light cover across the larger map
+      const chance = onFringe ? 0.05 : 0.016;
       if (rng() > chance) {
         continue;
       }

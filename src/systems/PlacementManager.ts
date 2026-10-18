@@ -13,7 +13,7 @@ export const BUILD_COSTS: Record<StructureKind, Partial<Record<InventoryItemId, 
   bench: { wood: 3 },
   wall: { stone: 2 },
   light: { wood: 1, ore: 1 },
-  decoration: { wood: 1, scrap: 1 },
+  decoration: { wood: 1, ore: 1 },
 };
 
 export const BUILD_LABELS: Record<StructureKind, string> = {
