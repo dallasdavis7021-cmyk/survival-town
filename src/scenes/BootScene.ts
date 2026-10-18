@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { gameState } from '../state/GameState';
 import { preloadBiomeAssets } from '../systems/BiomeAssets';
+import { preloadCaveCreature } from '../systems/CaveCreature';
 import { preloadMinerals } from '../systems/Minerals';
 import { preloadPlayerSprite } from '../systems/PlayerSprite';
 import { preloadPortalAssets } from '../systems/PortalAssets';
@@ -16,6 +17,7 @@ export class BootScene extends Phaser.Scene {
     preloadBiomeAssets(this);
     preloadPortalAssets(this);
     preloadPlayerSprite(this);
+    preloadCaveCreature(this);
   }
 
   create(): void {
