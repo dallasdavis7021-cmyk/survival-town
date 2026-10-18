@@ -1,3 +1,5 @@
+import { CAVE_COLS, CAVE_ROWS } from '../maps/caveLayout';
+
 export type InventoryItemId =
   | 'wood'
   | 'stone'
@@ -37,18 +39,20 @@ export interface PlayerStats {
 }
 
 export interface PersistedState {
-  version: 1;
+  version: 2;
   player: PlayerStats;
   inventory: Record<InventoryItemId, number>;
   structures: PlacedStructure[];
   lastScene: 'TownScene' | 'CaveScene';
   pendingCaveGems: PendingCaveGem[];
+  /** Cave fog-of-war: row strings of '0'/'1', length CAVE_ROWS × CAVE_COLS. */
+  caveExplored: string[];
 }
 
 const STORAGE_KEY = 'survival-town-save-v1';
 
 const DEFAULT_STATE: PersistedState = {
-  version: 1,
+  version: 2,
   player: {
     hp: 100,
     maxHp: 100,
@@ -71,10 +75,32 @@ const DEFAULT_STATE: PersistedState = {
   structures: [],
   lastScene: 'TownScene',
   pendingCaveGems: [],
+  caveExplored: emptyCaveExplored(),
 };
+
+export function emptyCaveExplored(): string[] {
+  return Array.from({ length: CAVE_ROWS }, () => '0'.repeat(CAVE_COLS));
+}
 
 function cloneDefault(): PersistedState {
   return structuredClone(DEFAULT_STATE);
+}
+
+function normalizeCaveExplored(raw: unknown): string[] {
+  const blank = emptyCaveExplored();
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return blank;
+  }
+  const rows: string[] = [];
+  for (let y = 0; y < CAVE_ROWS; y += 1) {
+    const src = typeof raw[y] === 'string' ? (raw[y] as string) : '';
+    let row = '';
+    for (let x = 0; x < CAVE_COLS; x += 1) {
+      row += src[x] === '1' ? '1' : '0';
+    }
+    rows.push(row);
+  }
+  return rows;
 }
 
 export class GameState {
@@ -107,6 +133,41 @@ export class GameState {
 
   get pendingCaveGems(): PendingCaveGem[] {
     return this.data.pendingCaveGems;
+  }
+
+  get caveExplored(): string[] {
+    return this.data.caveExplored;
+  }
+
+  isCaveTileExplored(tx: number, ty: number): boolean {
+    if (ty < 0 || ty >= CAVE_ROWS || tx < 0 || tx >= CAVE_COLS) {
+      return false;
+    }
+    return this.data.caveExplored[ty]?.[tx] === '1';
+  }
+
+  /** Reveal cave tiles in a Chebyshev radius; returns true if anything new. */
+  revealCaveAround(tx: number, ty: number, radius = 3): boolean {
+    let changed = false;
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      for (let dx = -radius; dx <= radius; dx += 1) {
+        const x = tx + dx;
+        const y = ty + dy;
+        if (y < 0 || y >= CAVE_ROWS || x < 0 || x >= CAVE_COLS) {
+          continue;
+        }
+        const row = this.data.caveExplored[y];
+        if (row[x] === '1') {
+          continue;
+        }
+        this.data.caveExplored[y] = row.slice(0, x) + '1' + row.slice(x + 1);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.queueSave();
+    }
+    return changed;
   }
 
   setLastScene(scene: PersistedState['lastScene']): void {
@@ -199,18 +260,22 @@ export class GameState {
         return null;
       }
 
-      const parsed = JSON.parse(raw) as PersistedState;
-      if (parsed.version !== 1) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const ver = Number(parsed.version);
+      if (ver !== 1 && ver !== 2) {
         return null;
       }
+      const typed = parsed as unknown as Partial<PersistedState>;
 
       return {
         ...cloneDefault(),
-        ...parsed,
-        player: { ...cloneDefault().player, ...parsed.player },
-        inventory: { ...cloneDefault().inventory, ...parsed.inventory },
-        structures: Array.isArray(parsed.structures) ? parsed.structures : [],
-        pendingCaveGems: Array.isArray(parsed.pendingCaveGems) ? parsed.pendingCaveGems : [],
+        ...typed,
+        version: 2,
+        player: { ...cloneDefault().player, ...typed.player },
+        inventory: { ...cloneDefault().inventory, ...typed.inventory },
+        structures: Array.isArray(typed.structures) ? typed.structures : [],
+        pendingCaveGems: Array.isArray(typed.pendingCaveGems) ? typed.pendingCaveGems : [],
+        caveExplored: normalizeCaveExplored(typed.caveExplored),
       };
     } catch {
       return null;

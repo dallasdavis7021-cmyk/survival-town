@@ -14,6 +14,7 @@ import {
 } from '../systems/PlayerTools';
 import { ensurePortalAssetsLoaded, placePortal } from '../systems/PortalAssets';
 import { WildernessMetalSpawner } from '../systems/WildernessMetalSpawner';
+import { GameUi } from '../ui/GameUi';
 import { ensureShapeTextures } from '../utils/textures';
 import { isSafeGrid, SAFE_ZONE, WORLD_COLS, WORLD_ROWS } from '../world/Biomes';
 
@@ -43,6 +44,7 @@ export class TownScene extends Phaser.Scene {
   private transitioning = false;
   private facing = new Phaser.Math.Vector2(0, -1);
   private biomesReady = false;
+  private ui!: GameUi;
 
   constructor() {
     super('TownScene');
@@ -143,7 +145,7 @@ export class TownScene extends Phaser.Scene {
     this.pickupKey = keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (!pointer.rightButtonDown() || this.transitioning) {
+      if (!pointer.rightButtonDown() || this.transitioning || this.ui?.isOpen) {
         return;
       }
       this.onRightClick(pointer);
@@ -176,12 +178,25 @@ export class TownScene extends Phaser.Scene {
       }
     });
 
+    this.ui = new GameUi(this, {
+      area: 'town',
+      getPlayerWorld: () => ({ x: this.player.x, y: this.player.y }),
+    });
+
     this.applyTool();
     this.refreshHud();
   }
 
   update(): void {
     if (this.transitioning) {
+      return;
+    }
+
+    this.ui.update();
+    if (this.ui.isOpen) {
+      this.player.setVelocity(0, 0);
+      this.placement.setActive(false);
+      this.refreshHud();
       return;
     }
 
